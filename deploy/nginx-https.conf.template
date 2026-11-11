@@ -38,6 +38,15 @@ server {
         deny all;
     }
 
+    # Flutter uses WebAssembly.compileStreaming, which requires this MIME type.
+    # Keep the mapping scoped to WASM so the inherited JavaScript types remain.
+    location ~* \.wasm$ {
+        types { application/wasm wasm; }
+        default_type application/wasm;
+        try_files $uri =404;
+        expires -1;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
         expires -1;
