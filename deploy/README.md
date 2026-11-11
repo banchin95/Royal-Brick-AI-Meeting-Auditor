@@ -1,7 +1,8 @@
 # Тестовое развёртывание Royal Brick
 
 Отдельное приложение на Ubuntu, без остановки и изменения «Километров».
-Это подготовка конфигурации. Сервер, домен и совместимость с существующим
+MVP опубликован на https://www.royal-brick.ru; также настроен royal-brick.ru.
+При повторном развёртывании сервер, домен и совместимость с существующим
 reverse proxy проверяются до применения команд. Общие nginx.conf, firewall,
 Docker, Python ОС и службы других проектов не заменяются.
 
@@ -140,3 +141,20 @@ unit, выполнить `systemctl daemon-reload` и `systemctl enable --now ro
 Исходные документы: [nginx proxy](https://nginx.org/en/docs/http/ngx_http_proxy_module.html),
 [HTTP Basic](https://docs.nginx.com/nginx/admin-guide/security-controls/configuring-http-basic-authentication/),
 [sslip.io / nip.io](https://nip.io/).
+
+## Результат контрольного запуска 12.11.2026
+
+- Отдельный Python 3.12.16 и venv, служба `royal-brick` на loopback 8187.
+- HTTPS: `royal-brick.ru`, `www.royal-brick.ru`, временный адрес.
+- Анализ `openai/gpt-5.4-mini`, распознавание `openai/gpt-4o-transcribe` через Timeweb.
+- Синтетическое русское аудио 18,8 с прошло весь опубликованный цикл:
+  транскрипция, менеджер и клиент, 13 разделов отчёта.
+- Без пароля Web и API возвращают 401, с паролем — доступны.
+- Проверены активные таймеры Certbot. Новые nginx-файлы только
+  `conf.d/royal-brick-review.conf` и `conf.d/royal-brick-domain.conf`.
+- Старые конфигурации nginx совпали с контрольными суммами до установки,
+  процессы других приложений не перезапускались, «Километры» отвечают HTTP 200.
+
+Пароль и API-токен не включены в этот документ. Локальные данные входа:
+`private-data/review-access.local.txt`. После теста доступ можно закрыть,
+останавливая только `royal-brick` и отключая только его nginx-файлы.
