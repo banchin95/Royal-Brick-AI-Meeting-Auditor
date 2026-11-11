@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../domain/audit.dart';
+import '../domain/audio.dart';
 
 class AuditApiException implements Exception {
   const AuditApiException(this.message);
@@ -27,8 +28,7 @@ class AuditApi {
 
   Future<AuditReport> analyze({
     required String transcript,
-    required ParticipantRole first,
-    required ParticipantRole second,
+    required Map<int, ParticipantRole> roles,
     required String context,
     required bool partial,
   }) async {
@@ -40,8 +40,8 @@ class AuditApi {
             body: jsonEncode({
               'transcript': transcript,
               'participants': [
-                {'speaker': 1, 'role': first.name},
-                {'speaker': 2, 'role': second.name},
+                for (final entry in roles.entries)
+                  {'speaker': entry.key, 'role': entry.value.name},
               ],
               'context': context,
               'is_partial': partial,
@@ -75,4 +75,73 @@ class AuditApi {
   }
 
   void close() => _client.close();
+
+  Future<Map<String, dynamic>> startTranscription(
+    AudioFileData audio,
+    bool diarize,
+  ) async {
+    try {
+      final request =
+          http.MultipartRequest(
+              'POST',
+              Uri.parse('$_baseUrl/api/transcriptions'),
+            )
+            ..fields['diarize'] = diarize.toString()
+            ..files.add(
+              http.MultipartFile.fromBytes(
+                'file',
+                audio.bytes,
+                filename: audio.name,
+              ),
+            );
+      final streamed = await _client
+          .send(request)
+          .timeout(const Duration(seconds: 120));
+      final response = await http.Response.fromStream(streamed);
+      return _jobResponse(response, expected: 202);
+    } on AuditApiException {
+      rethrow;
+    } catch (_) {
+      throw const AuditApiException(
+        'Не удалось передать аудио. Проверьте backend и соединение.',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> transcriptionStatus(String id) async {
+    try {
+      final response = await _client
+          .get(Uri.parse('$_baseUrl/api/transcriptions/$id'))
+          .timeout(const Duration(seconds: 15));
+      return _jobResponse(response);
+    } on AuditApiException {
+      rethrow;
+    } catch (_) {
+      throw const AuditApiException(
+        'Нет соединения с задачей распознавания. Проверьте backend.',
+      );
+    }
+  }
+
+  Future<void> cancelTranscription(String id) async {
+    final response = await _client
+        .delete(Uri.parse('$_baseUrl/api/transcriptions/$id'))
+        .timeout(const Duration(seconds: 15));
+    _jobResponse(response);
+  }
+
+  Map<String, dynamic> _jobResponse(
+    http.Response response, {
+    int expected = 200,
+  }) {
+    final body =
+        jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    if (response.statusCode != expected) {
+      throw AuditApiException(
+        (body['error'] as Map?)?['message'] as String? ??
+            'Ошибка обработки аудио.',
+      );
+    }
+    return body;
+  }
 }

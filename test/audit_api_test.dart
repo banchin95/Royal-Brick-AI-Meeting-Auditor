@@ -31,8 +31,7 @@ void main() {
       addTearDown(api.close);
       final report = await api.analyze(
         transcript: 'Учебный текст',
-        first: ParticipantRole.client,
-        second: ParticipantRole.manager,
+        roles: {1: ParticipantRole.client, 2: ParticipantRole.manager},
         context: 'Подтверждённых условий нет',
         partial: true,
       );
@@ -66,8 +65,7 @@ void main() {
       expect(
         () => api.analyze(
           transcript: 'Текст',
-          first: ParticipantRole.manager,
-          second: ParticipantRole.client,
+          roles: {1: ParticipantRole.manager, 2: ParticipantRole.client},
           context: '',
           partial: false,
         ),

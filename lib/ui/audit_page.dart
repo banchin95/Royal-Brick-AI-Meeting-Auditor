@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import '../demo/demo_meetings.dart';
 import '../domain/audit.dart';
 import '../services/audit_api.dart';
+import '../domain/audio.dart';
+import 'audio_panel.dart';
 
 const _ink = Color(0xFF302B28);
 const _muted = Color(0xFF746F69);
@@ -25,25 +27,40 @@ class _AuditPageState extends State<AuditPage> {
   late final AuditApi _api;
   bool _live = false;
   bool _busy = false;
+  bool _audioBusy = false;
+  String? _transcriptionNotice;
   bool _partial = false;
   int _revision = 0;
   String? _error;
-  ParticipantRole _first = ParticipantRole.manager;
-  ParticipantRole _second = ParticipantRole.client;
+  Map<int, ParticipantRole> _roles = {
+    1: ParticipantRole.manager,
+    2: ParticipantRole.client,
+  };
   AuditReport? _report;
   final _reportKey = GlobalKey();
 
-  bool get _matches => _meeting.matches(_transcript.text, _first, _second);
+  bool get _matches =>
+      _roles.length == 2 &&
+      _meeting.matches(
+        _transcript.text,
+        _roles[1] ?? ParticipantRole.unknown,
+        _roles[2] ?? ParticipantRole.unknown,
+      );
+  bool get _locked => _busy || _audioBusy;
   bool get _originalInput =>
       _matches &&
       _context.text == _meeting.context &&
       _partial == _meeting.partial;
   bool get _validRoles =>
-      _first != _second &&
-      _first != ParticipantRole.unknown &&
-      _second != ParticipantRole.unknown;
+      _roles.length >= 2 &&
+      _roles.length <= 12 &&
+      _roles.keys.every((id) => id >= 1 && id <= 12) &&
+      _roles.values.where((role) => role == ParticipantRole.manager).length ==
+          1 &&
+      _roles.values.contains(ParticipantRole.client) &&
+      !_roles.values.contains(ParticipantRole.unknown);
   bool get _canAnalyze =>
-      !_busy &&
+      !_locked &&
       (_live ? _validRoles && _transcript.text.trim().length >= 30 : _matches);
 
   @override
@@ -67,8 +84,8 @@ class _AuditPageState extends State<AuditPage> {
     _transcript.text = meeting.transcript;
     _context.text = meeting.context;
     _partial = meeting.partial;
-    _first = ParticipantRole.manager;
-    _second = ParticipantRole.client;
+    _roles = {1: ParticipantRole.manager, 2: ParticipantRole.client};
+    _transcriptionNotice = null;
     _discardReport();
   });
 
@@ -76,6 +93,43 @@ class _AuditPageState extends State<AuditPage> {
     _revision++;
     _report = null;
     _error = null;
+  }
+
+  void _syncRoles() {
+    final ids =
+        RegExp(r'Участник\s+(\d+)\s*:', caseSensitive: false)
+            .allMatches(_transcript.text)
+            .map((m) => int.parse(m[1]!))
+            .toSet()
+            .toList()
+          ..sort();
+    _roles = {for (final id in ids) id: _roles[id] ?? ParticipantRole.unknown};
+  }
+
+  void _mergeSpeaker(int source, int target) {
+    setState(() {
+      _transcript.text = _transcript.text.replaceAll(
+        RegExp('Участник\\s+$source\\s*:', caseSensitive: false),
+        'Участник $target:',
+      );
+      _syncRoles();
+      _discardReport();
+    });
+  }
+
+  void _onTranscribed(TranscriptionResult result) {
+    if (!mounted) return;
+    setState(() {
+      _live = true;
+      _transcript.text = result.text;
+      _context.clear();
+      _partial = true;
+      _roles = {for (final id in result.speakers) id: ParticipantRole.unknown};
+      _transcriptionNotice =
+          '${result.notice} Запись отмечена как неполная: '
+          'если встреча записана целиком, отключите этот флаг.';
+      _discardReport();
+    });
   }
 
   Future<void> _analyze() async {
@@ -93,8 +147,7 @@ class _AuditPageState extends State<AuditPage> {
     try {
       final report = await _api.analyze(
         transcript: _transcript.text,
-        first: _first,
-        second: _second,
+        roles: _roles,
         context: _context.text,
         partial: _partial,
       );
@@ -222,7 +275,7 @@ class _AuditPageState extends State<AuditPage> {
                       ),
                     ],
                     selected: {_live},
-                    onSelectionChanged: _busy
+                    onSelectionChanged: _locked
                         ? null
                         : (value) => setState(() {
                             _live = value.first;
@@ -243,6 +296,25 @@ class _AuditPageState extends State<AuditPage> {
                     ],
                   ),
                   const SizedBox(height: 28),
+                  AudioPanel(
+                    api: _api,
+                    enabled: !_busy,
+                    aiMode: _live,
+                    onEnableAi: () => setState(() {
+                      _live = true;
+                      _discardReport();
+                    }),
+                    onBusy: (value) {
+                      if (mounted) {
+                        setState(() {
+                          _audioBusy = value;
+                          if (value) _discardReport();
+                        });
+                      }
+                    },
+                    onResult: _onTranscribed,
+                  ),
+                  const SizedBox(height: 24),
                   LayoutBuilder(
                     builder: (context, constraints) {
                       final editor = _editor();
@@ -276,7 +348,7 @@ class _AuditPageState extends State<AuditPage> {
                   ),
                   const SizedBox(height: 28),
                   Text(
-                    'Локальный прототип · Этап 3 из 6 · ${_live ? 'OpenAI API' : 'Демо работает без внешних сервисов'}',
+                    'Локальный прототип · Этап 4 из 6 · ${_live ? 'OpenAI API' : 'Демоанализ работает без API'}',
                     style: const TextStyle(
                       color: _muted,
                       fontSize: 12,
@@ -317,7 +389,7 @@ class _AuditPageState extends State<AuditPage> {
           items: demoMeetings
               .map((m) => DropdownMenuItem(value: m.id, child: Text(m.title)))
               .toList(),
-          onChanged: _busy
+          onChanged: _locked
               ? null
               : (id) {
                   if (id != null) {
@@ -337,6 +409,13 @@ class _AuditPageState extends State<AuditPage> {
           const _Badge('Неполная запись', Icons.timelapse_outlined),
         ],
         const SizedBox(height: 24),
+        if (_transcriptionNotice != null) ...[
+          Text(
+            _transcriptionNotice!,
+            style: const TextStyle(color: _brick, height: 1.6),
+          ),
+          const SizedBox(height: 20),
+        ],
         const Text(
           'Роли участников',
           style: TextStyle(fontWeight: FontWeight.w600),
@@ -344,41 +423,72 @@ class _AuditPageState extends State<AuditPage> {
         const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
-            final first = _role(
-              1,
-              _first,
-              (value) => setState(() {
-                _first = value;
-                _discardReport();
-              }),
-            );
-            final second = _role(
-              2,
-              _second,
-              (value) => setState(() {
-                _second = value;
-                _discardReport();
-              }),
-            );
-            if (constraints.maxWidth < 360) {
-              return Column(
-                children: [first, const SizedBox(height: 12), second],
-              );
-            }
-            return Row(
+            final width = constraints.maxWidth < 360
+                ? constraints.maxWidth
+                : (constraints.maxWidth - 12) / 2;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
               children: [
-                Expanded(child: first),
-                const SizedBox(width: 12),
-                Expanded(child: second),
+                for (final entry in _roles.entries)
+                  SizedBox(
+                    width: width,
+                    child: Column(
+                      children: [
+                        _role(
+                          entry.key,
+                          entry.value,
+                          (value) => setState(() {
+                            _roles[entry.key] = value;
+                            _discardReport();
+                          }),
+                        ),
+                        if (_live && _roles.length > 2)
+                          DropdownButtonFormField<int>(
+                            key: ValueKey(
+                              'merge-${entry.key}-${_roles.keys.join('-')}',
+                            ),
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Тот же человек, что…',
+                            ),
+                            items: [
+                              for (final id in _roles.keys.where(
+                                (id) => id != entry.key,
+                              ))
+                                DropdownMenuItem(
+                                  value: id,
+                                  child: Text('Участник $id'),
+                                ),
+                            ],
+                            onChanged: _locked
+                                ? null
+                                : (target) {
+                                    if (target != null) {
+                                      _mergeSpeaker(entry.key, target);
+                                    }
+                                  },
+                          ),
+                      ],
+                    ),
+                  ),
               ],
             );
           },
         ),
+        if (_live && _roles.length > 2) ...[
+          const SizedBox(height: 10),
+          const Text(
+            'Объединяйте метки только после прослушивания: все реплики выбранного номера '
+            'будут подписаны номером указанного участника. При ошибке исправьте подписи в тексте.',
+            style: TextStyle(fontSize: 12, color: _muted, height: 1.5),
+          ),
+        ],
         const SizedBox(height: 20),
         TextField(
           key: const ValueKey('transcript'),
           controller: _transcript,
-          readOnly: _busy,
+          readOnly: _locked,
           minLines: 12,
           maxLines: 18,
           keyboardType: TextInputType.multiline,
@@ -387,7 +497,10 @@ class _AuditPageState extends State<AuditPage> {
             labelText: 'Текст разговора',
             alignLabelWithHint: true,
           ),
-          onChanged: (_) => setState(_discardReport),
+          onChanged: (_) => setState(() {
+            _syncRoles();
+            _discardReport();
+          }),
         ),
         const SizedBox(height: 8),
         Text(
@@ -406,7 +519,7 @@ class _AuditPageState extends State<AuditPage> {
               style: TextStyle(fontSize: 14),
             ),
             value: _partial,
-            onChanged: _busy
+            onChanged: _locked
                 ? null
                 : (value) => setState(() {
                     _partial = value;
@@ -416,7 +529,7 @@ class _AuditPageState extends State<AuditPage> {
           TextField(
             key: const ValueKey('analysis-context'),
             controller: _context,
-            readOnly: _busy,
+            readOnly: _locked,
             minLines: 3,
             maxLines: 7,
             decoration: const InputDecoration(
@@ -435,7 +548,8 @@ class _AuditPageState extends State<AuditPage> {
           if (!_validRoles) ...[
             const SizedBox(height: 12),
             const Text(
-              'Назначьте одного менеджера и одного клиента.',
+              'Назначьте одного оцениваемого менеджера и хотя бы одного клиента. '
+              'Остальные голоса можно отметить как других участников.',
               style: TextStyle(color: _brick),
             ),
           ],
@@ -500,17 +614,30 @@ class _AuditPageState extends State<AuditPage> {
               ),
             ),
             TextButton(
-              onPressed: _busy ? null : () => _load(_meeting),
+              onPressed: _locked ? null : () => _load(_meeting),
               child: const Text('Восстановить пример'),
             ),
             if (_live)
+              TextButton.icon(
+                onPressed: _locked || _transcript.text.isEmpty
+                    ? null
+                    : () => _copy(_transcript.text),
+                icon: const Icon(Icons.copy_outlined, size: 16),
+                label: const Text('Копировать транскрипцию'),
+              ),
+            if (_live)
               TextButton(
-                onPressed: _busy
+                onPressed: _locked
                     ? null
                     : () => setState(() {
                         _transcript.clear();
                         _context.clear();
                         _partial = false;
+                        _roles = {
+                          1: ParticipantRole.unknown,
+                          2: ParticipantRole.unknown,
+                        };
+                        _transcriptionNotice = null;
                         _discardReport();
                       }),
                 child: const Text('Очистить для своего текста'),
@@ -538,7 +665,7 @@ class _AuditPageState extends State<AuditPage> {
           ),
         )
         .toList(),
-    onChanged: _busy
+    onChanged: _locked
         ? null
         : (role) {
             if (role != null) onChanged(role);

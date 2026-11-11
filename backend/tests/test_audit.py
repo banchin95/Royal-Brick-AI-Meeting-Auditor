@@ -35,6 +35,14 @@ def test_parser_derives_speakers_times_and_keeps_multiline_text():
     assert len(parse_transcript(TRANSCRIPT.replace("Хочу", "Хочу\nтеперь"))) == 2
 
 
+def test_multiple_clients_and_other_participants_are_not_merged():
+    request = AnalyzeRequest.model_validate({**INPUT,
+        "transcript": TRANSCRIPT + "\nУчастник 3: Я помогу передать фотографии.",
+        "participants": [*INPUT["participants"], {"speaker": 3, "role": "other"}],
+    })
+    assert len(request.participants) == 3
+
+
 @pytest.mark.parametrize("change", [
     {"transcript": "Неподписанный текст разговора длиной больше тридцати символов"},
     {"transcript": TRANSCRIPT.replace("Участник 2", "Участник 3")},

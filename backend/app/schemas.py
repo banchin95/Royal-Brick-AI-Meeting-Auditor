@@ -13,8 +13,8 @@ class StrictModel(BaseModel):
 
 
 class Participant(StrictModel):
-    speaker: int = Field(ge=1, le=2)
-    role: str = Field(pattern="^(manager|client)$")
+    speaker: int = Field(ge=1, le=12)
+    role: str = Field(pattern="^(manager|client|other)$")
 
 
 class Turn(StrictModel):
@@ -40,27 +40,30 @@ def parse_transcript(text: str) -> list[Turn]:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         body = text[match.end():end].strip()
         speaker = int(match[2])
-        if speaker not in (1, 2) or not body:
-            raise ValueError("Поддерживаются непустые реплики участников 1 и 2.")
+        if not 1 <= speaker <= 12 or not body:
+            raise ValueError("Поддерживаются непустые реплики участников с номерами 1–12.")
         turns.append(Turn(id=index, speaker=speaker, timestamp=match[1], text=body))
-    if {turn.speaker for turn in turns} != {1, 2}:
-        raise ValueError("Нужны реплики обоих участников; их роли должны быть установлены.")
+    if len({turn.speaker for turn in turns}) < 2:
+        raise ValueError("Нужны реплики хотя бы двух участников с установленными ролями.")
     return turns
 
 
 class AnalyzeRequest(StrictModel):
     transcript: str = Field(min_length=30, max_length=60_000)
-    participants: list[Participant] = Field(min_length=2, max_length=2)
+    participants: list[Participant] = Field(min_length=2, max_length=12)
     context: str = Field(default="", max_length=16_000)
     is_partial: bool = False
 
     @model_validator(mode="after")
     def validate_input(self):
-        if {p.speaker for p in self.participants} != {1, 2}:
-            raise ValueError("Укажите разных участников 1 и 2.")
-        if {p.role for p in self.participants} != {"manager", "client"}:
-            raise ValueError("Назначьте одного менеджера и одного клиента.")
-        parse_transcript(self.transcript)
+        ids = {p.speaker for p in self.participants}
+        turns = parse_transcript(self.transcript)
+        if len(ids) != len(self.participants) or ids != {turn.speaker for turn in turns}:
+            raise ValueError("Роли должны соответствовать номерам участников в тексте без повторов.")
+        if sum(p.role == "manager" for p in self.participants) != 1 or not any(
+            p.role == "client" for p in self.participants
+        ):
+            raise ValueError("Выберите одного оцениваемого менеджера и хотя бы одного клиента.")
         return self
 
 

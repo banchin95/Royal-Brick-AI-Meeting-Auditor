@@ -3,6 +3,7 @@ enum AssessmentStatus { scored, notApplicable, noData }
 enum ParticipantRole {
   manager('Менеджер'),
   client('Клиент'),
+  other('Другой участник'),
   unknown('Не определена');
 
   const ParticipantRole(this.label);
