@@ -8,8 +8,9 @@ from openai import (
 from pydantic import ValidationError
 
 from .config import Settings, load_instructions, BACKEND_ROOT
-from .schemas import AnalyzeRequest, GeneratedAudit, parse_transcript
+from .schemas import AnalyzeRequest, parse_transcript
 from .scoring import InvalidAudit, build_report
+from .grounding import GroundedAudit, grounded_utterances, resolve_audit
 from .preparation import (
     PrepareRequest, GeneratedPreparation, InvalidPreparation, preparation_source, build_preparation,
 )
@@ -37,14 +38,15 @@ class AuditService:
 
     async def analyze(self, request: AnalyzeRequest):
         turns = parse_transcript(request.transcript)
+        utterances, catalog = grounded_utterances(turns)
         payload = {
             "participants": [p.model_dump() for p in request.participants],
             "is_partial": request.is_partial,
             "additional_context": request.context,
-            "utterances": [turn.model_dump() for turn in turns],
+            "utterances": utterances,
         }
-        return await self._generate(payload, self.instructions, GeneratedAudit,
-            lambda result: build_report(result, turns, self.settings.model, request.is_partial))
+        return await self._generate(payload, self.instructions, GroundedAudit,
+            lambda result: build_report(resolve_audit(result, catalog), turns, self.settings.model, request.is_partial))
 
     async def prepare_transcript(self, request: PrepareRequest):
         try:

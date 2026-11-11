@@ -9,7 +9,8 @@ import pytest
 
 from backend.app.config import Settings
 from backend.app.main import create_app
-from backend.app.schemas import AnalyzeRequest, GeneratedAudit
+from backend.app.schemas import AnalyzeRequest
+from backend.app.grounding import GroundedAudit
 from backend.app.service import AnalysisError, AuditService
 from test_audit import INPUT, finish, raw_audit  # shared deterministic fixtures
 
@@ -60,12 +61,13 @@ def test_provider_uses_structured_outputs_and_no_storage(raw_audit):
     async def run():
         service = AuditService(Settings(api_key="test-only-placeholder"))
         service.client.responses.parse = AsyncMock(return_value=SimpleNamespace(
-            status="completed", output_parsed=GeneratedAudit.model_validate(raw_audit)))
+            status="completed", output_parsed=GroundedAudit.model_validate(raw_audit)))
         try:
             response = await service.analyze(AnalyzeRequest.model_validate(INPUT))
             options = service.client.responses.parse.call_args.kwargs
             assert options["store"] is False
-            assert options["text_format"] is GeneratedAudit
+            assert options["text_format"] is GroundedAudit
+            assert '"fragments":' in options["input"][0]["content"]
             assert '"is_partial": true' in options["input"][0]["content"]
             assert len(response["sections"]) == 13
         finally:

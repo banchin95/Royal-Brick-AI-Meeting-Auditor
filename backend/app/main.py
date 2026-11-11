@@ -26,7 +26,7 @@ def create_app(settings: Settings | None = None, service=None, transcription_ser
         if service is None:
             await application.state.audit_service.close()
 
-    application = FastAPI(title="Royal Brick Meeting Auditor", version="0.5.1", lifespan=lifespan)
+    application = FastAPI(title="Royal Brick Meeting Auditor", version="0.5.2", lifespan=lifespan)
     application.add_middleware(CORSMiddleware, allow_origins=list(settings.origins),
                                allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type"])
 
@@ -46,7 +46,7 @@ def create_app(settings: Settings | None = None, service=None, transcription_ser
     @application.get("/api/health")
     async def health():
         return {"status": "ok", "ai_configured": bool(settings.api_key),
-                "model": settings.model, "version": "0.5.1",
+                "model": settings.model, "version": "0.5.2",
                 "audio_tools_ready": bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))}
 
     @application.post("/api/transcriptions", status_code=202)
