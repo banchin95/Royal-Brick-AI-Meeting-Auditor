@@ -8,7 +8,6 @@ from openai import (
 from pydantic import ValidationError
 
 from .config import Settings, load_instructions, BACKEND_ROOT
-from .compat import timeout
 from .schemas import AnalyzeRequest, parse_transcript
 from .scoring import InvalidAudit, build_report
 from .grounding import GroundedAudit, grounded_utterances, resolve_audit
@@ -71,7 +70,7 @@ class AuditService:
         except (TimeoutError, asyncio.TimeoutError):
             raise AnalysisError(429, "analysis_busy", "Уже выполняется анализ. Дождитесь его завершения.") from None
         try:
-            async with timeout(self.settings.timeout):
+            async with asyncio.timeout(self.settings.timeout):
                 response = await self.client.responses.parse(
                     model=self.settings.model,
                     instructions=instructions,

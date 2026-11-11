@@ -14,7 +14,6 @@ import uuid
 from openai import AsyncOpenAI, APIError, APITimeoutError, AuthenticationError, PermissionDeniedError, RateLimitError
 
 from .config import Settings
-from .compat import timeout
 from .service import AnalysisError
 
 
@@ -244,7 +243,7 @@ class TranscriptionService:
         try:
             destination = Path(directory.name) / "meeting.mp3"
             duration = await prepare_audio(source, destination, self.settings)
-            async with timeout(120):
+            async with asyncio.timeout(120):
                 chunks = await audio_chunks(destination, duration)
             job.total_parts = len(chunks)
             job.status = "transcribing"
@@ -267,7 +266,7 @@ class TranscriptionService:
                     job.completed_parts += 1
                     return offset, result
             tasks = []
-            async with timeout(self.settings.transcription_timeout):
+            async with asyncio.timeout(self.settings.transcription_timeout):
                 try:
                     tasks = [asyncio.create_task(recognize_part(index, *chunk))
                              for index, chunk in enumerate(chunks, 1)]

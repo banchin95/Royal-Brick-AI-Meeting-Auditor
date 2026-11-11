@@ -1,9 +1,6 @@
-import asyncio
-
 import pytest
 
 from backend.app import config
-from backend.app.compat import timeout
 from backend.app.config import Settings
 
 
@@ -34,16 +31,3 @@ def test_openai_ignores_timeweb_credentials(monkeypatch):
 def test_unknown_provider_fails_closed():
     with pytest.raises(ValueError, match="AI_PROVIDER"):
         Settings(provider="unknown")
-
-
-def test_compatible_timeout_cancels_and_runs_cleanup():
-    cleaned = []
-    async def run():
-        with pytest.raises((TimeoutError, asyncio.TimeoutError)):
-            async with timeout(0.01):
-                try:
-                    await asyncio.sleep(10)
-                finally:
-                    cleaned.append(True)
-    asyncio.run(run())
-    assert cleaned == [True]
