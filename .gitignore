@@ -5,6 +5,15 @@
 *.swp
 .DS_Store
 __pycache__/
+.venv/
+.pytest_cache/
+private-data/
+backend/prompts/*.local.txt
+*.m4a
+*.mp3
+*.wav
+*.ogg
+*.flac
 .env
 .env.*
 !.env.example

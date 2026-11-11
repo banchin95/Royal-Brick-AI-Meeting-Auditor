@@ -157,11 +157,84 @@ class AuditReport {
     required this.stages,
     required this.sections,
     required this.price,
+    this.isAi = false,
+    this.model,
   });
+
+  factory AuditReport.fromJson(Map<String, dynamic> json) {
+    AssessmentStatus status(String value) => switch (value) {
+      'scored' => AssessmentStatus.scored,
+      'not_applicable' => AssessmentStatus.notApplicable,
+      'no_data' => AssessmentStatus.noData,
+      _ => throw const FormatException('Неизвестный статус оценки'),
+    };
+    CheckStatus check(String value) => switch (value) {
+      'done' => CheckStatus.done,
+      'not_done' => CheckStatus.notDone,
+      'not_applicable' => CheckStatus.notApplicable,
+      'no_data' => CheckStatus.noData,
+      _ => throw const FormatException('Неизвестный статус проверки цены'),
+    };
+    final rawStages = json['stages'] as List;
+    final rawSections = json['sections'] as List;
+    final price = json['price'] as Map<String, dynamic>;
+    if (rawStages.length != 9 ||
+        rawSections.length != 13 ||
+        (price['checks'] as List).length != 5 ||
+        json['source'] != 'openai') {
+      throw const FormatException('Неверная структура отчёта');
+    }
+    final report = AuditReport(
+      isAi: true,
+      model: json['model'] as String,
+      stages: rawStages
+          .map(
+            (stage) => StageEvaluation(
+              status: status(stage['status'] as String),
+              points: (stage['points'] as num?)?.toDouble(),
+              comment: stage['comment'] as String,
+            ),
+          )
+          .toList(),
+      sections: rawSections
+          .map(
+            (section) => ReportSection(
+              section['body'] as String,
+              (section['evidence'] as List)
+                  .map(
+                    (quote) => Utterance(
+                      quote['at'] as String? ?? 'Без метки',
+                      quote['speaker'] as int,
+                      quote['text'] as String,
+                    ),
+                  )
+                  .toList(),
+            ),
+          )
+          .toList(),
+      price: PriceAudit(
+        checks: (price['checks'] as List)
+            .map((value) => check(value as String))
+            .toList(),
+        sequence: price['sequence'] as String,
+        comment: price['comment'] as String,
+      ),
+    );
+    final calculated =
+        report.score; // Проверяем границы и отсутствие баллов у Н/П.
+    final serverScore = json['score'] as Map<String, dynamic>;
+    if ((calculated.coverage - (serverScore['coverage'] as num)).abs() > 0.01 ||
+        (calculated.earned - (serverScore['earned'] as num)).abs() > 0.01) {
+      throw const FormatException('Баллы сервера не совпадают с критериями');
+    }
+    return report;
+  }
 
   final List<StageEvaluation> stages;
   final List<ReportSection> sections;
   final PriceAudit price;
+  final bool isAi;
+  final String? model;
   ScoreSummary get score => ScoreSummary.calculate(stages);
   String get crmText => sections[11].body;
 
@@ -199,8 +272,8 @@ class AuditReport {
   }
 
   String toPlainText() =>
-      'ROYAL BRICK · УЧЕБНЫЙ ДЕМОАНАЛИЗ\n'
-      'Подготовленный пример, не результат работы ИИ.\n\n'
+      '${isAi ? 'ROYAL BRICK · ИИ-АНАЛИЗ' : 'ROYAL BRICK · УЧЕБНЫЙ ДЕМОАНАЛИЗ'}\n'
+      '${isAi ? 'Отчёт сформирован ИИ. Важные выводы проверьте по записи.' : 'Подготовленный пример, не результат работы ИИ.'}\n\n'
       '${List.generate(sectionTitles.length, sectionText).join('\n\n──────────\n\n')}';
 }
 

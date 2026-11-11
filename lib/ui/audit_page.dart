@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../demo/demo_meetings.dart';
 import '../domain/audit.dart';
+import '../services/audit_api.dart';
 
 const _ink = Color(0xFF302B28);
 const _muted = Color(0xFF746F69);
@@ -10,7 +11,8 @@ const _brick = Color(0xFF933D32);
 const _green = Color(0xFF276447);
 
 class AuditPage extends StatefulWidget {
-  const AuditPage({super.key});
+  const AuditPage({super.key, this.api});
+  final AuditApi? api;
 
   @override
   State<AuditPage> createState() => _AuditPageState();
@@ -19,36 +21,102 @@ class AuditPage extends StatefulWidget {
 class _AuditPageState extends State<AuditPage> {
   DemoMeeting _meeting = demoMeetings.first;
   late final TextEditingController _transcript;
+  late final TextEditingController _context;
+  late final AuditApi _api;
+  bool _live = false;
+  bool _busy = false;
+  bool _partial = false;
+  int _revision = 0;
+  String? _error;
   ParticipantRole _first = ParticipantRole.manager;
   ParticipantRole _second = ParticipantRole.client;
   AuditReport? _report;
   final _reportKey = GlobalKey();
 
   bool get _matches => _meeting.matches(_transcript.text, _first, _second);
+  bool get _originalInput =>
+      _matches &&
+      _context.text == _meeting.context &&
+      _partial == _meeting.partial;
+  bool get _validRoles =>
+      _first != _second &&
+      _first != ParticipantRole.unknown &&
+      _second != ParticipantRole.unknown;
+  bool get _canAnalyze =>
+      !_busy &&
+      (_live ? _validRoles && _transcript.text.trim().length >= 30 : _matches);
 
   @override
   void initState() {
     super.initState();
     _transcript = TextEditingController(text: _meeting.transcript);
+    _context = TextEditingController(text: _meeting.context);
+    _api = widget.api ?? AuditApi();
   }
 
   @override
   void dispose() {
     _transcript.dispose();
+    _context.dispose();
+    _api.close();
     super.dispose();
   }
 
   void _load(DemoMeeting meeting) => setState(() {
     _meeting = meeting;
     _transcript.text = meeting.transcript;
+    _context.text = meeting.context;
+    _partial = meeting.partial;
     _first = ParticipantRole.manager;
     _second = ParticipantRole.client;
-    _report = null;
+    _discardReport();
   });
+
+  void _discardReport() {
+    _revision++;
+    _report = null;
+    _error = null;
+  }
+
+  Future<void> _analyze() async {
+    if (!_canAnalyze) return;
+    if (!_live) {
+      _showReport();
+      return;
+    }
+    final revision = _revision;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _report = null;
+    });
+    try {
+      final report = await _api.analyze(
+        transcript: _transcript.text,
+        first: _first,
+        second: _second,
+        context: _context.text,
+        partial: _partial,
+      );
+      if (!mounted || revision != _revision) return;
+      setState(() => _report = report);
+      _scrollToReport();
+    } on AuditApiException catch (error) {
+      if (mounted && revision == _revision) {
+        setState(() => _error = error.message);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   void _showReport() {
     if (!_matches) return;
     setState(() => _report = _meeting.report);
+    _scrollToReport();
+  }
+
+  void _scrollToReport() {
     if (MediaQuery.sizeOf(context).width < 1080) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final reportContext = _reportKey.currentContext;
@@ -94,12 +162,12 @@ class _AuditPageState extends State<AuditPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Wrap(
+                  Wrap(
                     spacing: 24,
                     runSpacing: 12,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(
+                      const Text(
                         'ROYAL BRICK',
                         style: TextStyle(
                           color: _brick,
@@ -108,7 +176,12 @@ class _AuditPageState extends State<AuditPage> {
                           letterSpacing: 3,
                         ),
                       ),
-                      _Badge('Демонстрационный режим', Icons.science_outlined),
+                      _Badge(
+                        _live ? 'ИИ-анализ' : 'Демонстрационный режим',
+                        _live
+                            ? Icons.auto_awesome_outlined
+                            : Icons.science_outlined,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 36),
@@ -126,10 +199,35 @@ class _AuditPageState extends State<AuditPage> {
                     style: TextStyle(color: _muted, fontSize: 16, height: 1.6),
                   ),
                   const SizedBox(height: 20),
-                  const Text(
-                    'Выберите учебную встречу и откройте подготовленный разбор. '
-                    'Все данные вымышлены. Анализ собственного текста появится на следующем этапе.',
-                    style: TextStyle(color: _muted, height: 1.6),
+                  Text(
+                    _live
+                        ? 'Добавьте текст разговора и укажите роли. Текст и дополнительные данные '
+                              'передаются в OpenAI только после нажатия «Анализировать текст».'
+                        : 'Выберите учебную встречу и откройте подготовленный разбор. '
+                              'Все данные примеров вымышлены. Для своего текста выберите режим ИИ.',
+                    style: const TextStyle(color: _muted, height: 1.6),
+                  ),
+                  const SizedBox(height: 20),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('Демо'),
+                        icon: Icon(Icons.science_outlined),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('ИИ-анализ'),
+                        icon: Icon(Icons.auto_awesome_outlined),
+                      ),
+                    ],
+                    selected: {_live},
+                    onSelectionChanged: _busy
+                        ? null
+                        : (value) => setState(() {
+                            _live = value.first;
+                            _discardReport();
+                          }),
                   ),
                   const SizedBox(height: 28),
                   const Wrap(
@@ -150,7 +248,12 @@ class _AuditPageState extends State<AuditPage> {
                       final editor = _editor();
                       final report = Container(
                         key: _reportKey,
-                        child: _ReportPanel(report: _report, onCopy: _copy),
+                        child: _ReportPanel(
+                          report: _report,
+                          onCopy: _copy,
+                          busy: _busy,
+                          live: _live,
+                        ),
                       );
                       if (constraints.maxWidth < 1016) {
                         return Column(
@@ -172,9 +275,13 @@ class _AuditPageState extends State<AuditPage> {
                     },
                   ),
                   const SizedBox(height: 28),
-                  const Text(
-                    'Локальный прототип · Этап 2 из 6 · Данные не отправляются во внешние сервисы',
-                    style: TextStyle(color: _muted, fontSize: 12, height: 1.6),
+                  Text(
+                    'Локальный прототип · Этап 3 из 6 · ${_live ? 'OpenAI API' : 'Демо работает без внешних сервисов'}',
+                    style: const TextStyle(
+                      color: _muted,
+                      fontSize: 12,
+                      height: 1.6,
+                    ),
                   ),
                 ],
               ),
@@ -194,26 +301,38 @@ class _AuditPageState extends State<AuditPage> {
           style: TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
-        const Text('Учебные примеры', style: TextStyle(color: _muted)),
+        Text(
+          _live ? 'Текст для анализа' : 'Учебные примеры',
+          style: const TextStyle(color: _muted),
+        ),
         const SizedBox(height: 20),
         DropdownButtonFormField<String>(
-          key: ValueKey('scenario-${_meeting.id}'),
-          initialValue: _meeting.id,
+          key: ValueKey('scenario-${_meeting.id}-${_live && !_originalInput}'),
+          initialValue: _live && !_originalInput ? null : _meeting.id,
           isExpanded: true,
-          decoration: const InputDecoration(labelText: 'Пример встречи'),
+          hint: const Text('Выберите учебный пример'),
+          decoration: InputDecoration(
+            labelText: _live ? 'Загрузить учебный пример' : 'Пример встречи',
+          ),
           items: demoMeetings
               .map((m) => DropdownMenuItem(value: m.id, child: Text(m.title)))
               .toList(),
-          onChanged: (id) {
-            if (id != null) _load(demoMeetings.firstWhere((m) => m.id == id));
-          },
+          onChanged: _busy
+              ? null
+              : (id) {
+                  if (id != null) {
+                    _load(demoMeetings.firstWhere((m) => m.id == id));
+                  }
+                },
         ),
         const SizedBox(height: 12),
         Text(
-          _meeting.description,
+          _live && !_originalInput
+              ? 'Собственный текст для ИИ-анализа'
+              : _meeting.description,
           style: const TextStyle(color: _muted, height: 1.5),
         ),
-        if (_meeting.partial) ...[
+        if (!_live && _meeting.partial) ...[
           const SizedBox(height: 12),
           const _Badge('Неполная запись', Icons.timelapse_outlined),
         ],
@@ -230,7 +349,7 @@ class _AuditPageState extends State<AuditPage> {
               _first,
               (value) => setState(() {
                 _first = value;
-                _report = null;
+                _discardReport();
               }),
             );
             final second = _role(
@@ -238,7 +357,7 @@ class _AuditPageState extends State<AuditPage> {
               _second,
               (value) => setState(() {
                 _second = value;
-                _report = null;
+                _discardReport();
               }),
             );
             if (constraints.maxWidth < 360) {
@@ -259,6 +378,7 @@ class _AuditPageState extends State<AuditPage> {
         TextField(
           key: const ValueKey('transcript'),
           controller: _transcript,
+          readOnly: _busy,
           minLines: 12,
           maxLines: 18,
           keyboardType: TextInputType.multiline,
@@ -267,29 +387,78 @@ class _AuditPageState extends State<AuditPage> {
             labelText: 'Текст разговора',
             alignLabelWithHint: true,
           ),
-          onChanged: (_) => setState(() => _report = null),
+          onChanged: (_) => setState(_discardReport),
         ),
         const SizedBox(height: 8),
-        const Text(
-          'Временные метки учебные. Текст можно исправлять; изменения пока не сохраняются после перезагрузки.',
-          style: TextStyle(fontSize: 12, color: _muted, height: 1.5),
+        Text(
+          _live
+              ? 'Подпишите реплики «Участник 1: ...» и «Участник 2: ...». '
+                    'Метки [00:00] необязательны. Изменения хранятся только в этой вкладке.'
+              : 'Временные метки учебные. Текст можно исправлять; изменения пока не сохраняются после перезагрузки.',
+          style: const TextStyle(fontSize: 12, color: _muted, height: 1.5),
         ),
         const SizedBox(height: 12),
-        ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: const EdgeInsets.only(bottom: 16),
-          title: const Text(
-            'Контекст учебного примера',
-            style: TextStyle(fontSize: 14),
+        if (_live) ...[
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'Запись неполная',
+              style: TextStyle(fontSize: 14),
+            ),
+            value: _partial,
+            onChanged: _busy
+                ? null
+                : (value) => setState(() {
+                    _partial = value;
+                    _discardReport();
+                  }),
           ),
-          children: [
-            SelectableText(
-              _meeting.context,
-              style: const TextStyle(fontSize: 13, height: 1.6, color: _muted),
+          TextField(
+            key: const ValueKey('analysis-context'),
+            controller: _context,
+            readOnly: _busy,
+            minLines: 3,
+            maxLines: 7,
+            decoration: const InputDecoration(
+              labelText: 'Дополнительные данные и условия',
+              alignLabelWithHint: true,
+            ),
+            style: const TextStyle(fontSize: 13, height: 1.6),
+            onChanged: (_) => setState(_discardReport),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Укажите известные дату, имена, данные сделки и подтверждённые условия компании. '
+            'Если сведений нет, оставьте поле пустым.',
+            style: TextStyle(fontSize: 12, color: _muted, height: 1.5),
+          ),
+          if (!_validRoles) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Назначьте одного менеджера и одного клиента.',
+              style: TextStyle(color: _brick),
             ),
           ],
-        ),
-        if (!_matches) ...[
+        ] else
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 16),
+            title: const Text(
+              'Контекст учебного примера',
+              style: TextStyle(fontSize: 14),
+            ),
+            children: [
+              SelectableText(
+                _meeting.context,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.6,
+                  color: _muted,
+                ),
+              ),
+            ],
+          ),
+        if (!_live && !_matches) ...[
           const SizedBox(height: 12),
           const Text(
             'Текст или роли изменены. Подготовленный демоотчёт больше не соответствует '
@@ -298,20 +467,54 @@ class _AuditPageState extends State<AuditPage> {
           ),
         ],
         const SizedBox(height: 20),
+        if (_error != null) ...[
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _error!,
+              style: const TextStyle(color: _brick, height: 1.6),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         Wrap(
           spacing: 10,
           runSpacing: 12,
           children: [
             FilledButton.icon(
               key: const ValueKey('show-demo-report'),
-              onPressed: _matches ? _showReport : null,
-              icon: const Icon(Icons.auto_awesome_outlined, size: 18),
-              label: const Text('Показать демоанализ'),
+              onPressed: _canAnalyze ? _analyze : null,
+              icon: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.auto_awesome_outlined, size: 18),
+              label: Text(
+                _busy
+                    ? 'Анализирую…'
+                    : _live
+                    ? 'Анализировать текст'
+                    : 'Показать демоанализ',
+              ),
             ),
             TextButton(
-              onPressed: () => _load(_meeting),
+              onPressed: _busy ? null : () => _load(_meeting),
               child: const Text('Восстановить пример'),
             ),
+            if (_live)
+              TextButton(
+                onPressed: _busy
+                    ? null
+                    : () => setState(() {
+                        _transcript.clear();
+                        _context.clear();
+                        _partial = false;
+                        _discardReport();
+                      }),
+                child: const Text('Очистить для своего текста'),
+              ),
           ],
         ),
       ],
@@ -335,45 +538,64 @@ class _AuditPageState extends State<AuditPage> {
           ),
         )
         .toList(),
-    onChanged: (role) {
-      if (role != null) onChanged(role);
-    },
+    onChanged: _busy
+        ? null
+        : (role) {
+            if (role != null) onChanged(role);
+          },
   );
 }
 
 class _ReportPanel extends StatelessWidget {
-  const _ReportPanel({required this.report, required this.onCopy});
+  const _ReportPanel({
+    required this.report,
+    required this.onCopy,
+    required this.busy,
+    required this.live,
+  });
   final AuditReport? report;
   final ValueChanged<String> onCopy;
+  final bool busy;
+  final bool live;
 
   @override
   Widget build(BuildContext context) {
     final data = report;
     if (data == null) {
-      return const _Panel(
+      return _Panel(
         child: Padding(
           padding: EdgeInsets.symmetric(vertical: 56),
           child: Column(
             children: [
-              Icon(Icons.description_outlined, size: 48, color: _brick),
-              SizedBox(height: 20),
+              if (busy)
+                const CircularProgressIndicator()
+              else
+                const Icon(Icons.description_outlined, size: 48, color: _brick),
+              const SizedBox(height: 20),
               Text(
-                'Здесь появится разбор встречи',
+                busy ? 'Анализирую разговор' : 'Здесь появится разбор встречи',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              SizedBox(height: 14),
-              Text(
+              const SizedBox(height: 14),
+              const Text(
                 'Девять критериев оценки, проверка презентации цены, '
                 'профиль клиента и готовые тексты для следующего контакта.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: _muted, height: 1.7),
               ),
-              SizedBox(height: 24),
+              const SizedBox(height: 24),
               Text(
-                'Выберите пример и нажмите «Показать демоанализ».',
+                busy
+                    ? 'Запрос отправлен. Дождитесь отчёта; анализ ограничен по времени.'
+                    : live
+                    ? 'Добавьте текст и нажмите «Анализировать текст».'
+                    : 'Выберите пример и нажмите «Показать демоанализ».',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: _muted, height: 1.6),
+                style: const TextStyle(color: _muted, height: 1.6),
               ),
             ],
           ),
@@ -389,9 +611,11 @@ class _ReportPanel extends StatelessWidget {
             style: TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Подготовленный учебный разбор · 13 разделов',
-            style: TextStyle(color: _muted, height: 1.5),
+          Text(
+            data.isAi
+                ? 'ИИ-анализ · 13 разделов · Важные выводы проверьте по записи'
+                : 'Подготовленный учебный разбор · 13 разделов',
+            style: const TextStyle(color: _muted, height: 1.5),
           ),
           const SizedBox(height: 24),
           _ScoreOverview(score: data.score),

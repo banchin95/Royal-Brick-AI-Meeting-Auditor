@@ -1,0 +1,88 @@
+import asyncio
+import json
+
+from openai import (
+    APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI,
+    AuthenticationError, PermissionDeniedError, RateLimitError,
+)
+from pydantic import ValidationError
+
+from .config import Settings, load_instructions
+from .schemas import AnalyzeRequest, GeneratedAudit, parse_transcript
+from .scoring import InvalidAudit, build_report
+
+
+class AnalysisError(Exception):
+    def __init__(self, status: int, code: str, message: str):
+        self.status = status
+        self.code = code
+        self.message = message
+        super().__init__(code)  # Не сохраняем текст разговора или сообщения SDK.
+
+
+class AuditService:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.instructions = load_instructions()
+        self.client = AsyncOpenAI(api_key=settings.api_key, base_url="https://api.openai.com/v1", timeout=settings.timeout - 5,
+                                  max_retries=0) if settings.api_key else None
+        self._gate = asyncio.Lock()
+
+    async def close(self):
+        if self.client:
+            await self.client.close()
+
+    async def analyze(self, request: AnalyzeRequest):
+        if self.client is None:
+            raise AnalysisError(503, "api_not_configured",
+                                "API-ключ на сервере не настроен. Демо остаётся доступным.")
+        try:
+            await asyncio.wait_for(self._gate.acquire(), timeout=0.05)
+        except TimeoutError:
+            raise AnalysisError(429, "analysis_busy", "Уже выполняется анализ. Дождитесь его завершения.") from None
+        try:
+            turns = parse_transcript(request.transcript)
+            payload = {
+                "participants": [p.model_dump() for p in request.participants],
+                "is_partial": request.is_partial,
+                "additional_context": request.context,
+                "utterances": [turn.model_dump() for turn in turns],
+            }
+            async with asyncio.timeout(self.settings.timeout):
+                response = await self.client.responses.parse(
+                    model=self.settings.model,
+                    instructions=self.instructions,
+                    input=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+                    text_format=GeneratedAudit,
+                    max_output_tokens=self.settings.max_output_tokens,
+                    reasoning={"effort": "low"},
+                    store=False,
+                )
+            if response.status != "completed":
+                raise AnalysisError(502, "incomplete_response",
+                                    "Модель не завершила отчёт. Попробуйте сократить текст и повторить анализ.")
+            if response.output_parsed is None:
+                raise AnalysisError(502, "model_refusal",
+                                    "Модель не сформировала отчёт для этого текста. Проверьте содержание разговора.")
+            return build_report(response.output_parsed, turns, self.settings.model, request.is_partial)
+        except (APITimeoutError, TimeoutError):
+            raise AnalysisError(504, "analysis_timeout", "Время анализа истекло. Попробуйте повторить запрос позже.") from None
+        except AuthenticationError:
+            raise AnalysisError(503, "api_credentials", "Серверный API-ключ недействителен или истёк. Нужно обновить его на backend.") from None
+        except PermissionDeniedError:
+            raise AnalysisError(503, "api_access", "OpenAI отклонил доступ к API. Проверьте доступ проекта и условия подключения.") from None
+        except RateLimitError as error:
+            quota = error.code in ("insufficient_quota", "billing_hard_limit_reached")
+            raise AnalysisError(503 if quota else 429,
+                                "quota_exceeded" if quota else "rate_limit",
+                                "На API-счёте OpenAI нет доступной квоты. Проверьте баланс и лимиты проекта."
+                                if quota else "Достигнут лимит запросов OpenAI. Попробуйте позже.") from None
+        except APIConnectionError:
+            raise AnalysisError(503, "api_connection", "Сервер не смог подключиться к OpenAI. Проверьте соединение и повторите позже.") from None
+        except APIStatusError:
+            raise AnalysisError(502, "provider_error", "Сервис ИИ вернул ошибку. Проверьте модель и настройки backend.") from None
+        except (ValidationError, InvalidAudit):
+            raise AnalysisError(502, "invalid_model_response",
+                                "Ответ ИИ не прошёл проверку структуры, баллов или цитат. Недостоверный отчёт не показан.") from None
+        finally:
+            self._gate.release()
