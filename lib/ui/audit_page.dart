@@ -349,7 +349,7 @@ class _AuditPageState extends State<AuditPage> {
                   ],
                   const SizedBox(height: 24),
                   const Text(
-                    'Аудио и текст обрабатываются в OpenAI. Данные встречи хранятся в этой вкладке.',
+                    'Аудио и текст передаются ИИ-сервису для обработки. Данные встречи хранятся в этой вкладке.',
                     style: TextStyle(color: muted, fontSize: 12, height: 1.5),
                   ),
                 ],

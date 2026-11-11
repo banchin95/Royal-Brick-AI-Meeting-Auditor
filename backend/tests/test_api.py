@@ -57,9 +57,11 @@ def test_missing_key_is_an_explicit_error():
         assert response.json()["error"]["code"] == "api_not_configured"
 
 
-def test_provider_uses_structured_outputs_and_no_storage(raw_audit):
+@pytest.mark.parametrize("provider", ["openai", "timeweb"])
+def test_provider_uses_structured_outputs_and_no_storage(raw_audit, provider):
     async def run():
-        service = AuditService(Settings(api_key="test-only-placeholder"))
+        service = AuditService(Settings(api_key="test-only-placeholder", provider=provider))
+        assert service.client.base_url.host == ("api.timeweb.ai" if provider == "timeweb" else "api.openai.com")
         service.client.responses.parse = AsyncMock(return_value=SimpleNamespace(
             status="completed", output_parsed=GroundedAudit.model_validate(raw_audit)))
         try:
@@ -70,6 +72,7 @@ def test_provider_uses_structured_outputs_and_no_storage(raw_audit):
             assert '"fragments":' in options["input"][0]["content"]
             assert '"is_partial": true' in options["input"][0]["content"]
             assert len(response["sections"]) == 13
+            assert response["source"] == provider
         finally:
             await service.close()
     asyncio.run(run())

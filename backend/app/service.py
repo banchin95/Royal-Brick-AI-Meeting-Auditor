@@ -8,6 +8,7 @@ from openai import (
 from pydantic import ValidationError
 
 from .config import Settings, load_instructions, BACKEND_ROOT
+from .compat import timeout
 from .schemas import AnalyzeRequest, parse_transcript
 from .scoring import InvalidAudit, build_report
 from .grounding import GroundedAudit, grounded_utterances, resolve_audit
@@ -28,7 +29,7 @@ class AuditService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.instructions = load_instructions()
-        self.client = AsyncOpenAI(api_key=settings.api_key, base_url="https://api.openai.com/v1", timeout=settings.timeout - 5,
+        self.client = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url, timeout=settings.timeout - 5,
                                   max_retries=0) if settings.api_key else None
         self._gate = asyncio.Lock()
 
@@ -45,8 +46,10 @@ class AuditService:
             "additional_context": request.context,
             "utterances": utterances,
         }
-        return await self._generate(payload, self.instructions, GroundedAudit,
+        report = await self._generate(payload, self.instructions, GroundedAudit,
             lambda result: build_report(resolve_audit(result, catalog), turns, self.settings.model, request.is_partial))
+        report["source"] = self.settings.provider
+        return report
 
     async def prepare_transcript(self, request: PrepareRequest):
         try:
@@ -65,10 +68,10 @@ class AuditService:
                                 "API-ключ на сервере не настроен. Обратитесь к администратору.")
         try:
             await asyncio.wait_for(self._gate.acquire(), timeout=0.05)
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             raise AnalysisError(429, "analysis_busy", "Уже выполняется анализ. Дождитесь его завершения.") from None
         try:
-            async with asyncio.timeout(self.settings.timeout):
+            async with timeout(self.settings.timeout):
                 response = await self.client.responses.parse(
                     model=self.settings.model,
                     instructions=instructions,
@@ -85,20 +88,20 @@ class AuditService:
                 raise AnalysisError(502, "model_refusal",
                                     "Модель не сформировала отчёт для этого текста. Проверьте содержание разговора.")
             return convert(response.output_parsed)
-        except (APITimeoutError, TimeoutError):
+        except (APITimeoutError, TimeoutError, asyncio.TimeoutError):
             raise AnalysisError(504, "analysis_timeout", "Время анализа истекло. Попробуйте повторить запрос позже.") from None
         except AuthenticationError:
             raise AnalysisError(503, "api_credentials", "Серверный API-ключ недействителен или истёк. Нужно обновить его на backend.") from None
         except PermissionDeniedError:
-            raise AnalysisError(503, "api_access", "OpenAI отклонил доступ к API. Проверьте доступ проекта и условия подключения.") from None
+            raise AnalysisError(503, "api_access", f"{self.settings.provider_name} отклонил доступ к API. Проверьте доступ проекта и условия подключения.") from None
         except RateLimitError as error:
             quota = error.code in ("insufficient_quota", "billing_hard_limit_reached")
             raise AnalysisError(503 if quota else 429,
                                 "quota_exceeded" if quota else "rate_limit",
-                                "На API-счёте OpenAI нет доступной квоты. Проверьте баланс и лимиты проекта."
-                                if quota else "Достигнут лимит запросов OpenAI. Попробуйте позже.") from None
+                                f"На API-счёте {self.settings.provider_name} нет доступной квоты. Проверьте баланс и лимиты проекта."
+                                if quota else f"Достигнут лимит запросов {self.settings.provider_name}. Попробуйте позже.") from None
         except APIConnectionError:
-            raise AnalysisError(503, "api_connection", "Сервер не смог подключиться к OpenAI. Проверьте соединение и повторите позже.") from None
+            raise AnalysisError(503, "api_connection", f"Сервер не смог подключиться к {self.settings.provider_name}. Проверьте соединение и повторите позже.") from None
         except APIStatusError:
             raise AnalysisError(502, "provider_error", "Сервис ИИ вернул ошибку. Проверьте модель и настройки backend.") from None
         except InvalidPreparation:

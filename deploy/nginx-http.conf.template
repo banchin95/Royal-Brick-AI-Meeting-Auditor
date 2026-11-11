@@ -1,0 +1,14 @@
+# Add this server only. Never replace nginx.conf or another project's server.
+server {
+    listen 80;
+    server_name @@DOMAIN@@;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/royal-brick-acme;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://@@DOMAIN@@$request_uri;
+    }
+}

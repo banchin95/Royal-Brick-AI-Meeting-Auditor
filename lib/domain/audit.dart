@@ -182,7 +182,7 @@ class AuditReport {
     if (rawStages.length != 9 ||
         rawSections.length != 13 ||
         (price['checks'] as List).length != 5 ||
-        json['source'] != 'openai') {
+        !const ['openai', 'timeweb'].contains(json['source'])) {
       throw const FormatException('Неверная структура отчёта');
     }
     final report = AuditReport(

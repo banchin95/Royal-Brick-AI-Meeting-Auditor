@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 import json
 import math
 import logging
-import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -15,6 +14,7 @@ import uuid
 from openai import AsyncOpenAI, APIError, APITimeoutError, AuthenticationError, PermissionDeniedError, RateLimitError
 
 from .config import Settings
+from .compat import timeout
 from .service import AnalysisError
 
 
@@ -30,7 +30,7 @@ async def run_media(*args, timeout):
         raise AnalysisError(503, "audio_tools_missing", "На backend нужны FFmpeg и ffprobe для подготовки аудио.") from None
     try:
         stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout)
-    except (TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
         if process.returncode is None:
             process.kill()
         await process.communicate()
@@ -185,7 +185,7 @@ class AudioJob:
 class TranscriptionService:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.client = AsyncOpenAI(api_key=settings.api_key, base_url="https://api.openai.com/v1",
+        self.client = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url,
             max_retries=0, timeout=settings.transcription_timeout - 5) if settings.api_key else None
         self.jobs: dict[str, AudioJob] = {}
         self._active = None
@@ -204,6 +204,8 @@ class TranscriptionService:
 
     async def submit(self, upload, diarize):
         self._purge()
+        if diarize and self.settings.provider == "timeweb":
+            raise AnalysisError(422, "diarization_unavailable", "В Timeweb используется обычное распознавание. Участники определяются следующим шагом по тексту.")
         if self.client is None:
             raise AnalysisError(503, "api_not_configured", "Настройте серверный API-ключ для распознавания.")
         if self._active:
@@ -242,7 +244,7 @@ class TranscriptionService:
         try:
             destination = Path(directory.name) / "meeting.mp3"
             duration = await prepare_audio(source, destination, self.settings)
-            async with asyncio.timeout(120):
+            async with timeout(120):
                 chunks = await audio_chunks(destination, duration)
             job.total_parts = len(chunks)
             job.status = "transcribing"
@@ -251,7 +253,10 @@ class TranscriptionService:
             if diarize:
                 options["chunking_strategy"] = "auto"
             else:
-                options["languages"] = ["ru"]
+                if self.settings.provider == "timeweb":
+                    options["language"] = "ru"
+                else:
+                    options["languages"] = ["ru"]
             gate = asyncio.Semaphore(2)
             async def recognize_part(index, path, offset, length):
                 async with gate:
@@ -262,7 +267,7 @@ class TranscriptionService:
                     job.completed_parts += 1
                     return offset, result
             tasks = []
-            async with asyncio.timeout(self.settings.transcription_timeout):
+            async with timeout(self.settings.transcription_timeout):
                 try:
                     tasks = [asyncio.create_task(recognize_part(index, *chunk))
                              for index, chunk in enumerate(chunks, 1)]
@@ -276,22 +281,19 @@ class TranscriptionService:
             job.status = "completed"
         except asyncio.CancelledError:
             job.status = "cancelled"
-        except (TimeoutError, APITimeoutError):
+        except (TimeoutError, asyncio.TimeoutError, APITimeoutError):
             job.status, job.error = "failed", {"code": "transcription_timeout", "message": "Время подготовки или распознавания истекло. Попробуйте запись короче."}
         except AnalysisError as error:
             job.status, job.error = "failed", {"code": error.code, "message": error.message}
         except (AuthenticationError, PermissionDeniedError):
-            job.status, job.error = "failed", {"code": "api_access", "message": "OpenAI отклонил доступ. Проверьте серверный ключ и доступ проекта."}
+            job.status, job.error = "failed", {"code": "api_access", "message": f"{self.settings.provider_name} отклонил доступ. Проверьте серверный ключ и доступ проекта."}
         except RateLimitError as error:
             job.status, job.error = "failed", {"code": "quota_exceeded" if error.code == "insufficient_quota" else "rate_limit",
-                "message": "Проверьте квоту и лимиты API OpenAI, затем повторите распознавание."}
+                "message": f"Проверьте квоту и лимиты API {self.settings.provider_name}, затем повторите распознавание."}
         except APIError as error:
-            diagnostic = str(getattr(error, "message", "Provider error"))
-            diagnostic = diagnostic.replace(self.settings.api_key, "[REDACTED]")
-            diagnostic = re.sub(r"sk-[^\s\"']+", "[REDACTED]", diagnostic)
-            logging.getLogger(__name__).warning("OpenAI audio error: %s status=%s code=%s %s",
-                type(error).__name__, getattr(error, "status_code", None), getattr(error, "code", None), diagnostic[:600])
-            job.status, job.error = "failed", {"code": "transcription_provider", "message": "Не удалось получить ответ распознавания OpenAI. Проверьте соединение и выбранную модель."}
+            logging.getLogger(__name__).warning("Audio provider error: provider=%s type=%s status=%s code=%s",
+                self.settings.provider, type(error).__name__, getattr(error, "status_code", None), getattr(error, "code", None))
+            job.status, job.error = "failed", {"code": "transcription_provider", "message": f"Не удалось получить ответ распознавания {self.settings.provider_name}. Проверьте соединение и выбранную модель."}
         except Exception:
             job.status, job.error = "failed", {"code": "audio_processing", "message": "Не удалось обработать аудиофайл. Проверьте запись и настройки backend."}
         finally:

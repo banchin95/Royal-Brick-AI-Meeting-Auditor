@@ -7,6 +7,11 @@ import '../domain/audit.dart';
 import '../domain/audio.dart';
 import '../domain/preparation.dart';
 
+// An empty API_BASE_URL uses the site's HTTPS origin behind the reverse proxy.
+Uri apiEndpoint(String baseUrl, String path, {Uri? pageUri}) => baseUrl.isEmpty
+    ? (pageUri ?? Uri.base).resolve(path)
+    : Uri.parse('${baseUrl.replaceFirst(RegExp(r'/+$'), '')}$path');
+
 class AuditApiException implements Exception {
   const AuditApiException(this.message);
   final String message;
@@ -36,7 +41,7 @@ class AuditApi {
     try {
       final response = await _client
           .post(
-            Uri.parse('$_baseUrl/api/analyze'),
+            apiEndpoint(_baseUrl, '/api/analyze'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'transcript': transcript,
@@ -84,7 +89,7 @@ class AuditApi {
     try {
       final response = await _client
           .post(
-            Uri.parse('$_baseUrl/api/prepare-transcript'),
+            apiEndpoint(_baseUrl, '/api/prepare-transcript'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'transcript': transcript,
@@ -126,7 +131,7 @@ class AuditApi {
       final request =
           http.MultipartRequest(
               'POST',
-              Uri.parse('$_baseUrl/api/transcriptions'),
+              apiEndpoint(_baseUrl, '/api/transcriptions'),
             )
             ..fields['diarize'] = diarize.toString()
             ..files.add(
@@ -153,7 +158,7 @@ class AuditApi {
   Future<Map<String, dynamic>> transcriptionStatus(String id) async {
     try {
       final response = await _client
-          .get(Uri.parse('$_baseUrl/api/transcriptions/$id'))
+          .get(apiEndpoint(_baseUrl, '/api/transcriptions/$id'))
           .timeout(const Duration(seconds: 15));
       return _jobResponse(response);
     } on AuditApiException {
@@ -167,7 +172,7 @@ class AuditApi {
 
   Future<void> cancelTranscription(String id) async {
     final response = await _client
-        .delete(Uri.parse('$_baseUrl/api/transcriptions/$id'))
+        .delete(apiEndpoint(_baseUrl, '/api/transcriptions/$id'))
         .timeout(const Duration(seconds: 15));
     _jobResponse(response);
   }

@@ -110,6 +110,30 @@ async def fake_prepare(source, destination, settings):
     return 3
 
 
+def test_timeweb_audio_uses_its_endpoint_model_and_language(monkeypatch):
+    monkeypatch.setattr(audio, "prepare_audio", fake_prepare)
+    async def run():
+        service = TranscriptionService(Settings(api_key="test-only-placeholder", provider="timeweb",
+            plain_transcription_model="openai/gpt-4o-transcribe"))
+        assert service.client.base_url.host == "api.timeweb.ai"
+        service.client.audio.transcriptions.create = AsyncMock(return_value={"text":"Распознанный разговор."})
+        upload = UploadFile(filename="test.wav", file=io.BytesIO(b"synthetic"))
+        try:
+            job = await service.submit(upload, False)
+            await service.jobs[job["id"]].task
+            assert service.get(job["id"])["status"] == "completed"
+            options = service.client.audio.transcriptions.create.call_args.kwargs
+            assert options["model"] == "openai/gpt-4o-transcribe"
+            assert options["language"] == "ru" and "languages" not in options
+            with pytest.raises(AnalysisError) as raised:
+                await service.submit(upload, True)
+            assert raised.value.code == "diarization_unavailable"
+        finally:
+            await upload.close()
+            await service.close()
+    asyncio.run(run())
+
+
 def test_jobs_clean_up_files_and_use_auto_chunking(monkeypatch):
     monkeypatch.setattr(audio, "prepare_audio", fake_prepare)
     async def run():

@@ -46,6 +46,7 @@ def create_app(settings: Settings | None = None, service=None, transcription_ser
     @application.get("/api/health")
     async def health():
         return {"status": "ok", "ai_configured": bool(settings.api_key),
+                "provider": settings.provider,
                 "model": settings.model, "version": "0.5.2",
                 "audio_tools_ready": bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))}
 
