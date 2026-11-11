@@ -21,7 +21,9 @@ Future<void> loadPlainText(
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  await tester.pumpWidget(MaterialApp(home: AuditPage(api: api)));
+  await tester.pumpWidget(
+    MaterialApp(home: AuditPage(api: api, autoPrepareAudio: false)),
+  );
   tester
       .widget<AudioPanel>(find.byType(AudioPanel))
       .onResult(
@@ -42,6 +44,93 @@ String textInEditor(WidgetTester tester) => tester
     .text;
 
 void main() {
+  testWidgets(
+    'После аудио метки автоматически собираются в предложение, без повторного распознавания',
+    (tester) async {
+      tester.view.physicalSize = const Size(1440, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final pending = Completer<http.Response>();
+      final requests = <http.Request>[];
+      final api = AuditApi(
+        client: MockClient((request) {
+          requests.add(request);
+          return pending.future;
+        }),
+      );
+      await tester.pumpWidget(MaterialApp(home: AuditPage(api: api)));
+      final panel = tester.widget<AudioPanel>(find.byType(AudioPanel));
+      final source = List.generate(
+        14,
+        (i) =>
+            '[${i.toString().padLeft(2, '0')}:01] Участник ${i + 1}: '
+            '${i.isEven ? 'Мне нужны панели.' : 'Уточним ваш объект.'}',
+      ).join('\n\n');
+      final grouped = source.replaceAllMapped(
+        RegExp(r'Участник (\d+):'),
+        (m) => 'Участник ${int.parse(m[1]!).isOdd ? 1 : 2}:',
+      );
+      panel.onBusy(true);
+      panel.onResult(
+        TranscriptionResult(
+          text: source,
+          speakers: List.generate(14, (i) => i + 1),
+          duration: 850,
+          notice: 'Метки разных частей.',
+          hasSpeakers: true,
+        ),
+      );
+      await tester.pump();
+      expect(requests, isEmpty); // Wait until the audio job releases the UI.
+      tester.widget<AudioPanel>(find.byType(AudioPanel)).onBusy(false);
+      await tester.pump();
+      await tester.pump();
+      expect(requests.length, 1);
+      expect(requests.single.url.path, '/api/prepare-transcript');
+      expect(jsonDecode(requests.single.body)['reconcile_speakers'], isTrue);
+      expect(find.byKey(const ValueKey('source-speakers-14')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('role-13-unknown')),
+        findsNothing,
+      ); // Collapsed, not a wall of controls.
+      final proposal = preparationFixture();
+      proposal['transcript'] = grouped;
+      proposal['source_speaker_count'] = 14;
+      final people = proposal['participants'] as List;
+      people[0]['source_speakers'] = [1, 3, 5, 7, 9, 11, 13];
+      people[1]['source_speakers'] = [2, 4, 6, 8, 10, 12, 14];
+      pending.complete(
+        http.Response(
+          jsonEncode(proposal),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(textInEditor(tester), source);
+      expect(
+        find.text('Исходных меток: 14 → ИИ предлагает участников: 2'),
+        findsOneWidget,
+      );
+      final apply = find.byKey(const ValueKey('apply-role-preparation'));
+      await tester.ensureVisible(apply);
+      await tester.tap(apply);
+      await tester.pumpAndSettle();
+      expect(textInEditor(tester), grouped);
+      expect(find.byKey(const ValueKey('role-1-client')), findsOneWidget);
+      expect(find.byKey(const ValueKey('role-2-manager')), findsOneWidget);
+      expect(requests.length, 1); // No automatic scoring or new audio request.
+      final undo = find.byKey(const ValueKey('undo-role-preparation'));
+      await tester.ensureVisible(undo);
+      await tester.tap(undo);
+      await tester.pumpAndSettle();
+      expect(textInEditor(tester), source);
+      expect(requests.length, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'Предположение не меняет текст до применения; отмена возвращает исходник',
     (tester) async {
@@ -69,7 +158,10 @@ void main() {
       );
       expect(requests.single.url.path, '/api/prepare-transcript');
       expect(requests.single.headers.containsKey('authorization'), isFalse);
-      expect(jsonDecode(requests.single.body), {'transcript': unlabelledText});
+      expect(jsonDecode(requests.single.body), {
+        'transcript': unlabelledText,
+        'reconcile_speakers': true,
+      });
       pending.complete(
         http.Response(
           jsonEncode(preparationFixture()),

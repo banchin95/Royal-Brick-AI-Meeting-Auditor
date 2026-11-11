@@ -121,7 +121,7 @@ def combine_transcriptions(parts, duration, diarize, model):
             notice += f"Проверьте конец части {index}: возможен нераспознанный участок. "
     notice += ("Номера голосов в каждой части отдельные; один человек может получить несколько номеров. "
                "Прослушайте запись и объедините метки одного человека перед назначением ролей. "
-               + "; ".join(boundaries) + ". Роли не определяются автоматически.")
+               + "; ".join(boundaries) + ". Можно предложить сопоставление меток и роли по тексту.")
     return {"text": segments_text(segments), "segments": segments, "speaker_count": voice_count,
             "duration_seconds": duration, "has_speakers": True, "model": model, "notice": notice}
 

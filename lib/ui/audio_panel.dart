@@ -17,6 +17,7 @@ class AudioPanel extends StatefulWidget {
     required this.onResult,
     required this.aiMode,
     required this.onEnableAi,
+    this.autoPrepareRoles = false,
   });
   final AuditApi api;
   final bool enabled;
@@ -24,6 +25,7 @@ class AudioPanel extends StatefulWidget {
   final ValueChanged<TranscriptionResult> onResult;
   final bool aiMode;
   final VoidCallback onEnableAi;
+  final bool autoPrepareRoles;
   @override
   State<AudioPanel> createState() => _AudioPanelState();
 }
@@ -208,7 +210,7 @@ class _AudioPanelState extends State<AudioPanel> {
           );
           setState(
             () => _status =
-                'Распознавание готово. Проверьте текст и назначьте роли ниже.',
+                'Распознавание готово. Проверьте участников и текст ниже.',
           );
           return;
         }
@@ -368,18 +370,18 @@ class _AudioPanelState extends State<AudioPanel> {
             ),
             subtitle: const Text(
               'Экспериментальный режим: может работать дольше. '
-              'Метки голосов нужно проверить; роли назначаются вручную.',
+              'Один человек может получить несколько меток в разных частях записи.',
             ),
             value: _diarize,
             onChanged: _locked
                 ? null
                 : (value) => setState(() => _diarize = value),
           ),
-          const Text(
+          Text(
             'При распознавании аудио передаётся в OpenAI. Исходный файл не изменяется. '
             'Текст ниже обновится после успешного распознавания. '
-            'В обычном режиме подпишите реплики участников вручную перед анализом.',
-            style: TextStyle(fontSize: 12, height: 1.6),
+            '${widget.autoPrepareRoles ? 'Затем ИИ автоматически предложит участников и роли по тексту.' : 'Роли можно предложить по тексту или назначить вручную.'}',
+            style: const TextStyle(fontSize: 12, height: 1.6),
           ),
           const SizedBox(height: 12),
           Wrap(

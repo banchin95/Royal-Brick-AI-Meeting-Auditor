@@ -48,11 +48,12 @@ class AuditService:
 
     async def prepare_transcript(self, request: PrepareRequest):
         try:
-            source = preparation_source(request.transcript)
+            source = preparation_source(request.transcript, request.reconcile_speakers)
         except ValueError as error:
             raise AnalysisError(422, "invalid_preparation_input", str(error)) from None
         instructions = (BACKEND_ROOT / "prompts" / "prepare_transcript.txt").read_text(encoding="utf-8")
-        payload = {"source_has_speakers": source.labelled, "units": source.units}
+        payload = {"source_has_speakers": source.labelled,
+                   "allow_speaker_reconciliation": source.reconcile, "units": source.units}
         return await self._generate(payload, instructions, GeneratedPreparation,
             lambda result: build_preparation(result, source, self.settings.model))
 

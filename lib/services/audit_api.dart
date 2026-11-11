@@ -77,13 +77,19 @@ class AuditApi {
 
   void close() => _client.close();
 
-  Future<TranscriptPreparation> prepareTranscript(String transcript) async {
+  Future<TranscriptPreparation> prepareTranscript(
+    String transcript, {
+    bool reconcileSpeakers = true,
+  }) async {
     try {
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/api/prepare-transcript'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'transcript': transcript}),
+            body: jsonEncode({
+              'transcript': transcript,
+              'reconcile_speakers': reconcileSpeakers,
+            }),
           )
           .timeout(const Duration(seconds: 135));
       final body =

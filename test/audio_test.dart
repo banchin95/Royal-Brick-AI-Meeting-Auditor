@@ -66,7 +66,9 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(const MaterialApp(home: AuditPage()));
+      await tester.pumpWidget(
+        const MaterialApp(home: AuditPage(autoPrepareAudio: false)),
+      );
       tester
           .widget<AudioPanel>(find.byType(AudioPanel))
           .onResult(
@@ -113,7 +115,9 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(const MaterialApp(home: AuditPage()));
+    await tester.pumpWidget(
+      const MaterialApp(home: AuditPage(autoPrepareAudio: false)),
+    );
     tester
         .widget<AudioPanel>(find.byType(AudioPanel))
         .onResult(

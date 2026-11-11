@@ -16,11 +16,13 @@ class SpeakerSuggestion {
     required this.confidence,
     required this.reason,
     required this.evidence,
+    this.sourceSpeakers = const [],
   });
   final int speaker;
   final ParticipantRole role;
   final RoleConfidence confidence;
   final String reason, evidence;
+  final List<int> sourceSpeakers;
 
   factory SpeakerSuggestion.fromJson(Map<String, dynamic> json) =>
       SpeakerSuggestion(
@@ -29,6 +31,7 @@ class SpeakerSuggestion {
         confidence: RoleConfidence.values.byName(json['confidence'] as String),
         reason: json['reason'] as String,
         evidence: json['evidence'] as String,
+        sourceSpeakers: (json['source_speakers'] as List? ?? []).cast<int>(),
       );
 }
 
@@ -38,9 +41,11 @@ class TranscriptPreparation {
     required this.participants,
     required this.notice,
     required this.model,
+    this.sourceSpeakerCount = 0,
   });
   final String transcript, notice, model;
   final List<SpeakerSuggestion> participants;
+  final int sourceSpeakerCount;
 
   factory TranscriptPreparation.fromJson(Map<String, dynamic> json) =>
       TranscriptPreparation(
@@ -53,5 +58,6 @@ class TranscriptPreparation {
             .toList(),
         notice: json['notice'] as String,
         model: json['model'] as String,
+        sourceSpeakerCount: json['source_speaker_count'] as int? ?? 0,
       );
 }

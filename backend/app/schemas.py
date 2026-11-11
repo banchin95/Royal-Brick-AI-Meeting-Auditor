@@ -31,7 +31,7 @@ TURN_LABEL = re.compile(
 )
 
 
-def parse_transcript(text: str) -> list[Turn]:
+def parse_transcript(text: str, *, max_speaker: int = 12) -> list[Turn]:
     matches = list(TURN_LABEL.finditer(text))
     if not matches or text[:matches[0].start()].strip():
         raise ValueError("Подпишите реплики: «Участник 1: ...» и «Участник 2: ...».")
@@ -40,8 +40,8 @@ def parse_transcript(text: str) -> list[Turn]:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         body = text[match.end():end].strip()
         speaker = int(match[2])
-        if not 1 <= speaker <= 12 or not body:
-            raise ValueError("Поддерживаются непустые реплики участников с номерами 1–12.")
+        if not 1 <= speaker <= max_speaker or not body:
+            raise ValueError(f"Поддерживаются непустые реплики участников с номерами 1–{max_speaker}.")
         turns.append(Turn(id=index, speaker=speaker, timestamp=match[1], text=body))
     if len({turn.speaker for turn in turns}) < 2:
         raise ValueError("Нужны реплики хотя бы двух участников с установленными ролями.")

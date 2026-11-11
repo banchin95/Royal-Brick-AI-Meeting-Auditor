@@ -13,10 +13,16 @@ class RolePreparationPanel extends StatelessWidget {
     required this.onApply,
     required this.onDismiss,
     required this.onUndo,
+    this.automatic = false,
+    this.onAutomaticChanged,
+    this.error,
   });
   final bool enabled, busy, hasText, canUndo;
   final TranscriptPreparation? suggestion;
   final VoidCallback onRequest, onApply, onDismiss, onUndo;
+  final bool automatic;
+  final ValueChanged<bool>? onAutomaticChanged;
+  final String? error;
 
   @override
   Widget build(BuildContext context) {
@@ -37,12 +43,18 @@ class RolePreparationPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           const Text(
-            'ИИ предложит менеджера и клиента по смыслу текста. '
-            'Если меток нет, предложит границы реплик. Проверьте результат по записи: '
+            'ИИ сопоставит повторяющиеся метки и предложит менеджера, клиента '
+            'и других участников. Если меток нет, предложит границы реплик. Проверьте результат по записи: '
             'такая разметка может ошибаться.',
             style: TextStyle(height: 1.5),
           ),
           const SizedBox(height: 12),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Автоматически после распознавания'),
+            value: automatic,
+            onChanged: enabled ? onAutomaticChanged : null,
+          ),
           OutlinedButton.icon(
             key: const ValueKey('prepare-roles'),
             onPressed: enabled && hasText ? onRequest : null,
@@ -64,6 +76,16 @@ class RolePreparationPanel extends StatelessWidget {
             const SizedBox(height: 12),
             const LinearProgressIndicator(),
           ],
+          if (error != null) ...[
+            const SizedBox(height: 12),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                error!,
+                style: const TextStyle(color: Color(0xFF933D32), height: 1.5),
+              ),
+            ),
+          ],
           if (canUndo) ...[
             const SizedBox(height: 12),
             const Text(
@@ -83,27 +105,30 @@ class RolePreparationPanel extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
-            Text(result.notice, style: const TextStyle(height: 1.5)),
-            for (final participant in result.participants) ...[
-              const SizedBox(height: 14),
+            if (result.sourceSpeakerCount > 0)
               Text(
-                'Участник ${participant.speaker} — ${participant.role.label}',
+                'Исходных меток: ${result.sourceSpeakerCount} → '
+                'ИИ предлагает участников: ${result.participants.length}',
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              Text(
-                'Уверенность модели: ${participant.confidence.label}',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF746F69)),
-              ),
-              const SizedBox(height: 4),
-              Text(participant.reason, style: const TextStyle(height: 1.5)),
-              Text(
-                '«${participant.evidence}»',
-                style: const TextStyle(
-                  height: 1.5,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
+            Text(result.notice, style: const TextStyle(height: 1.5)),
+            for (final participant in result.participants.take(6)) ...[
+              const SizedBox(height: 14),
+              _participantCard(participant),
             ],
+            if (result.participants.length > 6)
+              ExpansionTile(
+                title: Text(
+                  'Остальные участники: ${result.participants.length - 6}',
+                ),
+                children: [
+                  for (final p in result.participants.skip(6))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: _participantCard(p),
+                    ),
+                ],
+              ),
             const SizedBox(height: 12),
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
@@ -128,7 +153,7 @@ class RolePreparationPanel extends StatelessWidget {
                 FilledButton(
                   key: const ValueKey('apply-role-preparation'),
                   onPressed: enabled ? onApply : null,
-                  child: const Text('Применить разметку'),
+                  child: const Text('Подтвердить участников'),
                 ),
                 TextButton(
                   onPressed: enabled ? onDismiss : null,
@@ -141,4 +166,38 @@ class RolePreparationPanel extends StatelessWidget {
       ),
     );
   }
+
+  Widget _participantCard(SpeakerSuggestion participant) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Участник ${participant.speaker} — ${participant.role.label}',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        if (participant.sourceSpeakers.length > 1)
+          Text(
+            'Объединены метки: ${participant.sourceSpeakers.take(8).join(', ')}'
+            '${participant.sourceSpeakers.length > 8 ? ' и ещё ${participant.sourceSpeakers.length - 8}' : ''}',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF746F69)),
+          ),
+        Text(
+          'Уверенность модели: ${participant.confidence.label}',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF746F69)),
+        ),
+        const SizedBox(height: 4),
+        Text(participant.reason, style: const TextStyle(height: 1.5)),
+        Text(
+          '«${participant.evidence}»',
+          style: const TextStyle(height: 1.5, fontStyle: FontStyle.italic),
+        ),
+      ],
+    ),
+  );
 }

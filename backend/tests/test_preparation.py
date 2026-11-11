@@ -135,3 +135,47 @@ def test_unpunctuated_text_does_not_trigger_a_paid_request():
         finally:
             await service.close()
     asyncio.run(run())
+
+
+def test_many_chunk_labels_can_reconcile_without_changing_words_or_time():
+    text = '\n\n'.join(f'[{i:02d}:01] Участник {i + 1}: '
+        + ('Мне нужны панели.' if i % 2 == 0 else 'Уточним ваш объект.') for i in range(14))
+    source = preparation_source(text, reconcile_speakers=True)
+    plan = {**PLAN, 'runs': [
+        {'first_unit': i, 'last_unit': i, 'speaker': i % 2 + 1} for i in range(14)]}
+    result = build_preparation(GeneratedPreparation.model_validate(plan), source, 'test')
+    assert result['source_speaker_count'] == 14 and result['merged_speakers'] is True
+    assert result['participants'][0]['source_speakers'] == [1, 3, 5, 7, 9, 11, 13]
+    assert result['participants'][1]['source_speakers'] == [2, 4, 6, 8, 10, 12, 14]
+    # Every character except the numbers in speaker labels survives.
+    remove_ids = lambda s: re.sub(r'(Участник\s+)\d+', r'\1X', s)
+    assert remove_ids(text) == remove_ids(result['transcript'])
+    from backend.app.schemas import parse_transcript
+    with pytest.raises(ValueError):
+        parse_transcript(text)  # The scoring API still has its own 12-person limit.
+    assert {t.speaker for t in parse_transcript(result['transcript'])} == {1, 2}
+
+
+def test_reconciliation_cannot_split_one_source_voice_between_people():
+    text = 'Участник 1: Мне нужны панели.\nУчастник 2: Какой объект?\nУчастник 1: Частный дом.'
+    plan = {**PLAN, 'runs': [PLAN['runs'][0], PLAN['runs'][1],
+        {'first_unit': 2, 'last_unit': 2, 'speaker': 3}]}
+    with pytest.raises(InvalidPreparation):
+        build_preparation(GeneratedPreparation.model_validate(plan), preparation_source(text, True), 'test')
+
+
+def test_same_role_does_not_implicitly_merge_two_clients():
+    text = 'Участник 1: Мне нужны панели.\nУчастник 2: Какой объект?\nУчастник 3: А у меня гараж.'
+    plan = {"runs": [
+        {'first_unit': i, 'last_unit': i, 'speaker': i + 1} for i in range(3)],
+        'participants': [*PLAN['participants'], {**PLAN['participants'][0], 'speaker': 3, 'evidence_unit': 2}]}
+    result = build_preparation(GeneratedPreparation.model_validate(plan), preparation_source(text, True), 'test')
+    assert len(result['participants']) == 3 and result['merged_speakers'] is False
+    assert [p['role'] for p in result['participants']] == ['client', 'manager', 'client']
+
+
+def test_sparse_model_ids_are_renumbered_for_the_analysis_contract():
+    plan = {"runs": [{**r, 'speaker': 39 if r['speaker'] == 1 else 57} for r in PLAN['runs']],
+            "participants": [{**p, 'speaker': 39 if p['speaker'] == 1 else 57} for p in PLAN['participants']]}
+    result = build_preparation(GeneratedPreparation.model_validate(plan), preparation_source(RAW), 'test')
+    assert [p['speaker'] for p in result['participants']] == [1, 2]

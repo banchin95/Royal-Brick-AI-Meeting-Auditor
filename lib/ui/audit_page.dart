@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,8 +17,9 @@ const _brick = Color(0xFF933D32);
 const _green = Color(0xFF276447);
 
 class AuditPage extends StatefulWidget {
-  const AuditPage({super.key, this.api});
+  const AuditPage({super.key, this.api, this.autoPrepareAudio = true});
   final AuditApi? api;
+  final bool autoPrepareAudio;
 
   @override
   State<AuditPage> createState() => _AuditPageState();
@@ -31,6 +34,9 @@ class _AuditPageState extends State<AuditPage> {
   bool _busy = false;
   bool _audioBusy = false;
   bool _preparingRoles = false;
+  late bool _autoPrepareAudio;
+  bool _autoPreparationPending = false;
+  String? _rolePreparationError;
   TranscriptPreparation? _roleSuggestion;
   String? _roleUndoText;
   Map<int, ParticipantRole>? _roleUndoRoles;
@@ -75,6 +81,7 @@ class _AuditPageState extends State<AuditPage> {
     _transcript = TextEditingController(text: _meeting.transcript);
     _context = TextEditingController(text: _meeting.context);
     _api = widget.api ?? AuditApi();
+    _autoPrepareAudio = widget.autoPrepareAudio;
   }
 
   @override
@@ -126,6 +133,12 @@ class _AuditPageState extends State<AuditPage> {
     });
   }
 
+  void _tryAutoPreparation() {
+    if (!mounted || !_autoPreparationPending || _locked) return;
+    _autoPreparationPending = false;
+    unawaited(_prepareRoles());
+  }
+
   void _onTranscribed(TranscriptionResult result) {
     if (!mounted) return;
     setState(() {
@@ -139,13 +152,17 @@ class _AuditPageState extends State<AuditPage> {
           '${result.notice} Запись отмечена как неполная: '
           'если встреча записана целиком, отключите этот флаг.';
       _discardReport();
+      _autoPreparationPending = _autoPrepareAudio;
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tryAutoPreparation());
   }
 
   void _clearPreparation() {
     _roleSuggestion = null;
     _roleUndoText = null;
     _roleUndoRoles = null;
+    _rolePreparationError = null;
+    _autoPreparationPending = false;
   }
 
   Future<void> _prepareRoles() async {
@@ -154,6 +171,7 @@ class _AuditPageState extends State<AuditPage> {
     setState(() {
       _preparingRoles = true;
       _roleSuggestion = null;
+      _rolePreparationError = null;
       _discardReport();
     });
     try {
@@ -161,7 +179,7 @@ class _AuditPageState extends State<AuditPage> {
       if (!mounted || _transcript.text != source) return;
       setState(() => _roleSuggestion = suggestion);
     } on AuditApiException catch (error) {
-      if (mounted) setState(() => _error = error.message);
+      if (mounted) setState(() => _rolePreparationError = error.message);
     } finally {
       if (mounted) setState(() => _preparingRoles = false);
     }
@@ -357,6 +375,7 @@ class _AuditPageState extends State<AuditPage> {
                   AudioPanel(
                     api: _api,
                     enabled: !_busy && !_preparingRoles,
+                    autoPrepareRoles: _autoPrepareAudio,
                     aiMode: _live,
                     onEnableAi: () => setState(() {
                       _live = true;
@@ -368,6 +387,11 @@ class _AuditPageState extends State<AuditPage> {
                           _audioBusy = value;
                           if (value) _discardReport();
                         });
+                        if (!value) {
+                          WidgetsBinding.instance.addPostFrameCallback(
+                            (_) => _tryAutoPreparation(),
+                          );
+                        }
                       }
                     },
                     onResult: _onTranscribed,
@@ -474,6 +498,10 @@ class _AuditPageState extends State<AuditPage> {
             hasText: _transcript.text.trim().length >= 30,
             suggestion: _roleSuggestion,
             canUndo: _roleUndoText != null,
+            error: _rolePreparationError,
+            automatic: _autoPrepareAudio,
+            onAutomaticChanged: (value) =>
+                setState(() => _autoPrepareAudio = value),
             onRequest: _prepareRoles,
             onApply: _applyPreparation,
             onDismiss: () => setState(() => _roleSuggestion = null),
@@ -482,10 +510,22 @@ class _AuditPageState extends State<AuditPage> {
           const SizedBox(height: 20),
         ],
         if (_transcriptionNotice != null) ...[
-          Text(
-            _transcriptionNotice!,
-            style: const TextStyle(color: _brick, height: 1.6),
-          ),
+          if (_roles.length > 6)
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('Подробности исходного распознавания'),
+              children: [
+                Text(
+                  _transcriptionNotice!,
+                  style: const TextStyle(color: _muted, height: 1.5),
+                ),
+              ],
+            )
+          else
+            Text(
+              _transcriptionNotice!,
+              style: const TextStyle(color: _brick, height: 1.6),
+            ),
           const SizedBox(height: 20),
         ],
         const Text(
@@ -493,59 +533,73 @@ class _AuditPageState extends State<AuditPage> {
           style: TextStyle(fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 12),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final width = constraints.maxWidth < 360
-                ? constraints.maxWidth
-                : (constraints.maxWidth - 12) / 2;
-            return Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (final entry in _roles.entries)
-                  SizedBox(
-                    width: width,
-                    child: Column(
-                      children: [
-                        _role(
-                          entry.key,
-                          entry.value,
-                          (value) => setState(() {
-                            _roles[entry.key] = value;
-                            _roleSuggestion = null;
-                            _discardReport();
-                          }),
-                        ),
-                        if (_live && _roles.length > 2)
-                          DropdownButtonFormField<int>(
-                            key: ValueKey(
-                              'merge-${entry.key}-${_roles.keys.join('-')}',
+        Builder(
+          builder: (context) {
+            final fields = LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth < 360
+                    ? constraints.maxWidth
+                    : (constraints.maxWidth - 12) / 2;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    for (final entry in _roles.entries)
+                      SizedBox(
+                        width: width,
+                        child: Column(
+                          children: [
+                            _role(
+                              entry.key,
+                              entry.value,
+                              (value) => setState(() {
+                                _roles[entry.key] = value;
+                                _roleSuggestion = null;
+                                _discardReport();
+                              }),
                             ),
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Тот же человек, что…',
-                            ),
-                            items: [
-                              for (final id in _roles.keys.where(
-                                (id) => id != entry.key,
-                              ))
-                                DropdownMenuItem(
-                                  value: id,
-                                  child: Text('Участник $id'),
+                            if (_live && _roles.length > 2)
+                              DropdownButtonFormField<int>(
+                                key: ValueKey(
+                                  'merge-${entry.key}-${_roles.keys.join('-')}',
                                 ),
-                            ],
-                            onChanged: _locked
-                                ? null
-                                : (target) {
-                                    if (target != null) {
-                                      _mergeSpeaker(entry.key, target);
-                                    }
-                                  },
-                          ),
-                      ],
-                    ),
-                  ),
-              ],
+                                isExpanded: true,
+                                decoration: const InputDecoration(
+                                  labelText: 'Тот же человек, что…',
+                                ),
+                                items: [
+                                  for (final id in _roles.keys.where(
+                                    (id) => id != entry.key,
+                                  ))
+                                    DropdownMenuItem(
+                                      value: id,
+                                      child: Text('Участник $id'),
+                                    ),
+                                ],
+                                onChanged: _locked
+                                    ? null
+                                    : (target) {
+                                        if (target != null) {
+                                          _mergeSpeaker(entry.key, target);
+                                        }
+                                      },
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                );
+              },
+            );
+            if (_roles.length <= 6) return fields;
+            return ExpansionTile(
+              key: ValueKey('source-speakers-${_roles.length}'),
+              title: Text('Исходных меток голосов: ${_roles.length}'),
+              subtitle: const Text(
+                'Это может быть несколько номеров одного человека. '
+                'Сначала проверьте предложение ИИ выше.',
+              ),
+              children: [fields],
             );
           },
         ),
@@ -623,6 +677,7 @@ class _AuditPageState extends State<AuditPage> {
             const SizedBox(height: 12),
             const Text(
               'Назначьте одного оцениваемого менеджера и хотя бы одного клиента. '
+              'Для оценки поддерживается до 12 подтверждённых участников. '
               'Остальные голоса можно отметить как других участников.',
               style: TextStyle(color: _brick),
             ),
