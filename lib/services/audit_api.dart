@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../domain/audit.dart';
 import '../domain/audio.dart';
+import '../domain/preparation.dart';
 
 class AuditApiException implements Exception {
   const AuditApiException(this.message);
@@ -75,6 +76,41 @@ class AuditApi {
   }
 
   void close() => _client.close();
+
+  Future<TranscriptPreparation> prepareTranscript(String transcript) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/api/prepare-transcript'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'transcript': transcript}),
+          )
+          .timeout(const Duration(seconds: 135));
+      final body =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      if (response.statusCode != 200) {
+        throw AuditApiException(
+          (body['error'] as Map?)?['message'] as String? ??
+              'Не удалось определить участников. Исходный текст сохранён.',
+        );
+      }
+      return TranscriptPreparation.fromJson(body);
+    } on AuditApiException {
+      rethrow;
+    } on TimeoutException {
+      throw const AuditApiException(
+        'Время определения участников истекло. Исходный текст сохранён.',
+      );
+    } on http.ClientException {
+      throw const AuditApiException(
+        'Нет соединения с backend. Проверьте, что локальный сервер запущен.',
+      );
+    } catch (_) {
+      throw const AuditApiException(
+        'Не удалось прочитать разметку сервера. Исходный текст сохранён.',
+      );
+    }
+  }
 
   Future<Map<String, dynamic>> startTranscription(
     AudioFileData audio,

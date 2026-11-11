@@ -6,6 +6,8 @@ import '../domain/audit.dart';
 import '../services/audit_api.dart';
 import '../domain/audio.dart';
 import 'audio_panel.dart';
+import '../domain/preparation.dart';
+import 'role_preparation_panel.dart';
 
 const _ink = Color(0xFF302B28);
 const _muted = Color(0xFF746F69);
@@ -28,6 +30,10 @@ class _AuditPageState extends State<AuditPage> {
   bool _live = false;
   bool _busy = false;
   bool _audioBusy = false;
+  bool _preparingRoles = false;
+  TranscriptPreparation? _roleSuggestion;
+  String? _roleUndoText;
+  Map<int, ParticipantRole>? _roleUndoRoles;
   String? _transcriptionNotice;
   bool _partial = false;
   int _revision = 0;
@@ -46,7 +52,7 @@ class _AuditPageState extends State<AuditPage> {
         _roles[1] ?? ParticipantRole.unknown,
         _roles[2] ?? ParticipantRole.unknown,
       );
-  bool get _locked => _busy || _audioBusy;
+  bool get _locked => _busy || _audioBusy || _preparingRoles;
   bool get _originalInput =>
       _matches &&
       _context.text == _meeting.context &&
@@ -86,6 +92,7 @@ class _AuditPageState extends State<AuditPage> {
     _partial = meeting.partial;
     _roles = {1: ParticipantRole.manager, 2: ParticipantRole.client};
     _transcriptionNotice = null;
+    _clearPreparation();
     _discardReport();
   });
 
@@ -96,6 +103,7 @@ class _AuditPageState extends State<AuditPage> {
   }
 
   void _syncRoles() {
+    _clearPreparation();
     final ids =
         RegExp(r'Участник\s+(\d+)\s*:', caseSensitive: false)
             .allMatches(_transcript.text)
@@ -108,6 +116,7 @@ class _AuditPageState extends State<AuditPage> {
 
   void _mergeSpeaker(int source, int target) {
     setState(() {
+      _clearPreparation();
       _transcript.text = _transcript.text.replaceAll(
         RegExp('Участник\\s+$source\\s*:', caseSensitive: false),
         'Участник $target:',
@@ -121,6 +130,7 @@ class _AuditPageState extends State<AuditPage> {
     if (!mounted) return;
     setState(() {
       _live = true;
+      _clearPreparation();
       _transcript.text = result.text;
       _context.clear();
       _partial = true;
@@ -128,6 +138,54 @@ class _AuditPageState extends State<AuditPage> {
       _transcriptionNotice =
           '${result.notice} Запись отмечена как неполная: '
           'если встреча записана целиком, отключите этот флаг.';
+      _discardReport();
+    });
+  }
+
+  void _clearPreparation() {
+    _roleSuggestion = null;
+    _roleUndoText = null;
+    _roleUndoRoles = null;
+  }
+
+  Future<void> _prepareRoles() async {
+    if (!_live || _locked || _transcript.text.trim().length < 30) return;
+    final source = _transcript.text;
+    setState(() {
+      _preparingRoles = true;
+      _roleSuggestion = null;
+      _discardReport();
+    });
+    try {
+      final suggestion = await _api.prepareTranscript(source);
+      if (!mounted || _transcript.text != source) return;
+      setState(() => _roleSuggestion = suggestion);
+    } on AuditApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _preparingRoles = false);
+    }
+  }
+
+  void _applyPreparation() {
+    final suggestion = _roleSuggestion;
+    if (suggestion == null || _locked) return;
+    setState(() {
+      _roleUndoText = _transcript.text;
+      _roleUndoRoles = Map.of(_roles);
+      _transcript.text = suggestion.transcript;
+      _roles = {for (final p in suggestion.participants) p.speaker: p.role};
+      _roleSuggestion = null;
+      _discardReport();
+    });
+  }
+
+  void _undoPreparation() {
+    if (_roleUndoText == null || _locked) return;
+    setState(() {
+      _transcript.text = _roleUndoText!;
+      _roles = _roleUndoRoles!;
+      _clearPreparation();
       _discardReport();
     });
   }
@@ -254,8 +312,8 @@ class _AuditPageState extends State<AuditPage> {
                   const SizedBox(height: 20),
                   Text(
                     _live
-                        ? 'Добавьте текст разговора и укажите роли. Текст и дополнительные данные '
-                              'передаются в OpenAI только после нажатия «Анализировать текст».'
+                        ? 'Добавьте текст разговора. Можно предложить роли по тексту, проверить их и запустить оценку. '
+                              'Текст передаётся в OpenAI по кнопкам «Определить роли по тексту» и «Анализировать текст».'
                         : 'Выберите учебную встречу и откройте подготовленный разбор. '
                               'Все данные примеров вымышлены. Для своего текста выберите режим ИИ.',
                     style: const TextStyle(color: _muted, height: 1.6),
@@ -298,7 +356,7 @@ class _AuditPageState extends State<AuditPage> {
                   const SizedBox(height: 28),
                   AudioPanel(
                     api: _api,
-                    enabled: !_busy,
+                    enabled: !_busy && !_preparingRoles,
                     aiMode: _live,
                     onEnableAi: () => setState(() {
                       _live = true;
@@ -348,7 +406,7 @@ class _AuditPageState extends State<AuditPage> {
                   ),
                   const SizedBox(height: 28),
                   Text(
-                    'Локальный прототип · Этап 4 из 6 · ${_live ? 'OpenAI API' : 'Демоанализ работает без API'}',
+                    'Локальный прототип · Этап 5 из 6 · ${_live ? 'OpenAI API' : 'Демоанализ работает без API'}',
                     style: const TextStyle(
                       color: _muted,
                       fontSize: 12,
@@ -409,6 +467,20 @@ class _AuditPageState extends State<AuditPage> {
           const _Badge('Неполная запись', Icons.timelapse_outlined),
         ],
         const SizedBox(height: 24),
+        if (_live) ...[
+          RolePreparationPanel(
+            enabled: !_locked,
+            busy: _preparingRoles,
+            hasText: _transcript.text.trim().length >= 30,
+            suggestion: _roleSuggestion,
+            canUndo: _roleUndoText != null,
+            onRequest: _prepareRoles,
+            onApply: _applyPreparation,
+            onDismiss: () => setState(() => _roleSuggestion = null),
+            onUndo: _undoPreparation,
+          ),
+          const SizedBox(height: 20),
+        ],
         if (_transcriptionNotice != null) ...[
           Text(
             _transcriptionNotice!,
@@ -440,6 +512,7 @@ class _AuditPageState extends State<AuditPage> {
                           entry.value,
                           (value) => setState(() {
                             _roles[entry.key] = value;
+                            _roleSuggestion = null;
                             _discardReport();
                           }),
                         ),
@@ -506,6 +579,7 @@ class _AuditPageState extends State<AuditPage> {
         Text(
           _live
               ? 'Подпишите реплики «Участник 1: ...» и «Участник 2: ...». '
+                    'Можно использовать кнопку «Определить роли по тексту». '
                     'Метки [00:00] необязательны. Изменения хранятся только в этой вкладке.'
               : 'Временные метки учебные. Текст можно исправлять; изменения пока не сохраняются после перезагрузки.',
           style: const TextStyle(fontSize: 12, color: _muted, height: 1.5),
@@ -638,6 +712,7 @@ class _AuditPageState extends State<AuditPage> {
                           2: ParticipantRole.unknown,
                         };
                         _transcriptionNotice = null;
+                        _clearPreparation();
                         _discardReport();
                       }),
                 child: const Text('Очистить для своего текста'),

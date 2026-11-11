@@ -7,9 +7,12 @@ from openai import (
 )
 from pydantic import ValidationError
 
-from .config import Settings, load_instructions
+from .config import Settings, load_instructions, BACKEND_ROOT
 from .schemas import AnalyzeRequest, GeneratedAudit, parse_transcript
 from .scoring import InvalidAudit, build_report
+from .preparation import (
+    PrepareRequest, GeneratedPreparation, InvalidPreparation, preparation_source, build_preparation,
+)
 
 
 class AnalysisError(Exception):
@@ -33,6 +36,27 @@ class AuditService:
             await self.client.close()
 
     async def analyze(self, request: AnalyzeRequest):
+        turns = parse_transcript(request.transcript)
+        payload = {
+            "participants": [p.model_dump() for p in request.participants],
+            "is_partial": request.is_partial,
+            "additional_context": request.context,
+            "utterances": [turn.model_dump() for turn in turns],
+        }
+        return await self._generate(payload, self.instructions, GeneratedAudit,
+            lambda result: build_report(result, turns, self.settings.model, request.is_partial))
+
+    async def prepare_transcript(self, request: PrepareRequest):
+        try:
+            source = preparation_source(request.transcript)
+        except ValueError as error:
+            raise AnalysisError(422, "invalid_preparation_input", str(error)) from None
+        instructions = (BACKEND_ROOT / "prompts" / "prepare_transcript.txt").read_text(encoding="utf-8")
+        payload = {"source_has_speakers": source.labelled, "units": source.units}
+        return await self._generate(payload, instructions, GeneratedPreparation,
+            lambda result: build_preparation(result, source, self.settings.model))
+
+    async def _generate(self, payload, instructions, output_type, convert):
         if self.client is None:
             raise AnalysisError(503, "api_not_configured",
                                 "API-ключ на сервере не настроен. Демо остаётся доступным.")
@@ -41,19 +65,12 @@ class AuditService:
         except TimeoutError:
             raise AnalysisError(429, "analysis_busy", "Уже выполняется анализ. Дождитесь его завершения.") from None
         try:
-            turns = parse_transcript(request.transcript)
-            payload = {
-                "participants": [p.model_dump() for p in request.participants],
-                "is_partial": request.is_partial,
-                "additional_context": request.context,
-                "utterances": [turn.model_dump() for turn in turns],
-            }
             async with asyncio.timeout(self.settings.timeout):
                 response = await self.client.responses.parse(
                     model=self.settings.model,
-                    instructions=self.instructions,
+                    instructions=instructions,
                     input=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-                    text_format=GeneratedAudit,
+                    text_format=output_type,
                     max_output_tokens=self.settings.max_output_tokens,
                     reasoning={"effort": "low"},
                     store=False,
@@ -64,7 +81,7 @@ class AuditService:
             if response.output_parsed is None:
                 raise AnalysisError(502, "model_refusal",
                                     "Модель не сформировала отчёт для этого текста. Проверьте содержание разговора.")
-            return build_report(response.output_parsed, turns, self.settings.model, request.is_partial)
+            return convert(response.output_parsed)
         except (APITimeoutError, TimeoutError):
             raise AnalysisError(504, "analysis_timeout", "Время анализа истекло. Попробуйте повторить запрос позже.") from None
         except AuthenticationError:
@@ -81,6 +98,9 @@ class AuditService:
             raise AnalysisError(503, "api_connection", "Сервер не смог подключиться к OpenAI. Проверьте соединение и повторите позже.") from None
         except APIStatusError:
             raise AnalysisError(502, "provider_error", "Сервис ИИ вернул ошибку. Проверьте модель и настройки backend.") from None
+        except InvalidPreparation:
+            raise AnalysisError(502, "invalid_preparation_response",
+                                "Разметка ИИ не прошла проверку полноты текста или участников. Исходный текст сохранён.") from None
         except (ValidationError, InvalidAudit):
             raise AnalysisError(502, "invalid_model_response",
                                 "Ответ ИИ не прошёл проверку структуры, баллов или цитат. Недостоверный отчёт не показан.") from None
