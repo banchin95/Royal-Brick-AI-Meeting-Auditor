@@ -89,7 +89,7 @@ void main() {
       expect(requests.length, 1);
       expect(requests.single.url.path, '/api/prepare-transcript');
       expect(jsonDecode(requests.single.body)['reconcile_speakers'], isTrue);
-      expect(find.byKey(const ValueKey('source-speakers-14')), findsOneWidget);
+      expect(find.byKey(const ValueKey('source-speakers-14')), findsNothing);
       expect(
         find.byKey(const ValueKey('role-13-unknown')),
         findsNothing,
@@ -109,6 +109,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(textInEditor(tester), source);
+      await tester.ensureVisible(find.text('Почему такие роли?'));
+      await tester.tap(find.text('Почему такие роли?'));
+      await tester.pumpAndSettle();
       expect(
         find.text('Исходных меток: 14 → ИИ предлагает участников: 2'),
         findsOneWidget,
@@ -143,13 +146,13 @@ void main() {
         }),
       );
       await loadPlainText(tester, api);
-      final analyze = find.byKey(const ValueKey('show-demo-report'));
+      final analyze = find.byKey(const ValueKey('analyze-meeting'));
       expect(tester.widget<FilledButton>(analyze).onPressed, isNull);
       final button = find.byKey(const ValueKey('prepare-roles'));
       await tester.ensureVisible(button);
       await tester.tap(button);
       await tester.pump();
-      expect(find.text('Определяю участников…'), findsOneWidget);
+      expect(find.text('Определяем участников…'), findsOneWidget);
       expect(
         tester
             .widget<TextField>(find.byKey(const ValueKey('transcript')))
@@ -171,8 +174,14 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(textInEditor(tester), unlabelledText);
-      expect(find.text('Участник 1 — Клиент'), findsOneWidget);
-      expect(find.text('Участник 2 — Менеджер'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('suggested-role-1-client')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('suggested-role-2-manager')),
+        findsOneWidget,
+      );
       expect(tester.widget<FilledButton>(analyze).onPressed, isNull);
       final apply = find.byKey(const ValueKey('apply-role-preparation'));
       await tester.ensureVisible(apply);
@@ -217,11 +226,49 @@ void main() {
       expect(find.byKey(const ValueKey('role-2-unknown')), findsOneWidget);
       expect(
         tester
-            .widget<FilledButton>(
-              find.byKey(const ValueKey('show-demo-report')),
-            )
+            .widget<FilledButton>(find.byKey(const ValueKey('analyze-meeting')))
             .onPressed,
         isNull,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Роль можно исправить в предложении до подтверждения участников',
+    (tester) async {
+      final api = AuditApi(
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode(preparationFixture(unknownManager: true)),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          ),
+        ),
+      );
+      await loadPlainText(tester, api, narrow: true);
+      final request = find.byKey(const ValueKey('prepare-roles'));
+      await tester.ensureVisible(request);
+      await tester.tap(request);
+      await tester.pumpAndSettle();
+      final field = find.byKey(const ValueKey('suggested-role-2-unknown'));
+      await tester.ensureVisible(field);
+      await tester.tap(field);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Менеджер').last);
+      await tester.pumpAndSettle();
+      expect(textInEditor(tester), unlabelledText);
+      final apply = find.byKey(const ValueKey('apply-role-preparation'));
+      await tester.ensureVisible(apply);
+      await tester.tap(apply);
+      await tester.pumpAndSettle();
+      expect(textInEditor(tester), preparedText);
+      expect(find.byKey(const ValueKey('role-2-manager')), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('analyze-meeting')))
+            .onPressed,
+        isNotNull,
       );
       expect(tester.takeException(), isNull);
     },
@@ -255,7 +302,7 @@ void main() {
         find.byKey(const ValueKey('apply-role-preparation')),
         findsNothing,
       );
-      expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
+      expect(tester.widget<TextButton>(button).onPressed, isNotNull);
     },
   );
 

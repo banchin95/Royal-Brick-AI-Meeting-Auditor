@@ -17,12 +17,24 @@ class SpeakerSuggestion {
     required this.reason,
     required this.evidence,
     this.sourceSpeakers = const [],
+    this.manuallyEdited = false,
   });
   final int speaker;
   final ParticipantRole role;
   final RoleConfidence confidence;
   final String reason, evidence;
   final List<int> sourceSpeakers;
+  final bool manuallyEdited;
+
+  SpeakerSuggestion withRole(ParticipantRole value) => SpeakerSuggestion(
+    speaker: speaker,
+    role: value,
+    confidence: confidence,
+    reason: reason,
+    evidence: evidence,
+    sourceSpeakers: sourceSpeakers,
+    manuallyEdited: true,
+  );
 
   factory SpeakerSuggestion.fromJson(Map<String, dynamic> json) =>
       SpeakerSuggestion(

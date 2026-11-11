@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import '../domain/audit.dart';
 import '../domain/preparation.dart';
+import 'workspace_widgets.dart';
 
 class RolePreparationPanel extends StatelessWidget {
   const RolePreparationPanel({
@@ -13,189 +15,200 @@ class RolePreparationPanel extends StatelessWidget {
     required this.onApply,
     required this.onDismiss,
     required this.onUndo,
-    this.automatic = false,
-    this.onAutomaticChanged,
+    required this.onRoleChanged,
     this.error,
   });
   final bool enabled, busy, hasText, canUndo;
   final TranscriptPreparation? suggestion;
   final VoidCallback onRequest, onApply, onDismiss, onUndo;
-  final bool automatic;
-  final ValueChanged<bool>? onAutomaticChanged;
+  final void Function(int speaker, ParticipantRole role) onRoleChanged;
   final String? error;
 
   @override
   Widget build(BuildContext context) {
     final result = suggestion;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAF6F1),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE6E0D9)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Кто говорит?',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'ИИ сопоставит повторяющиеся метки и предложит менеджера, клиента '
-            'и других участников. Если меток нет, предложит границы реплик. Проверьте результат по записи: '
-            'такая разметка может ошибаться.',
-            style: TextStyle(height: 1.5),
-          ),
-          const SizedBox(height: 12),
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Автоматически после распознавания'),
-            value: automatic,
-            onChanged: enabled ? onAutomaticChanged : null,
-          ),
-          OutlinedButton.icon(
-            key: const ValueKey('prepare-roles'),
-            onPressed: enabled && hasText ? onRequest : null,
-            icon: const Icon(Icons.people_alt_outlined),
-            label: Text(
-              busy ? 'Определяю участников…' : 'Определить роли по тексту',
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'При нажатии текст передаётся в OpenAI. Оценка встречи запускается отдельно.',
-            style: TextStyle(
-              fontSize: 12,
-              color: Color(0xFF746F69),
-              height: 1.5,
-            ),
-          ),
-          if (busy) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(),
-          ],
-          if (error != null) ...[
-            const SizedBox(height: 12),
-            Semantics(
-              liveRegion: true,
-              child: Text(
-                error!,
-                style: const TextStyle(color: Color(0xFF933D32), height: 1.5),
-              ),
-            ),
-          ],
-          if (canUndo) ...[
-            const SizedBox(height: 12),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
             const Text(
-              'Предложенная разметка применена. Проверьте подписи и роли ниже.',
-              style: TextStyle(height: 1.5),
+              'Участники',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
-            TextButton(
-              key: const ValueKey('undo-role-preparation'),
-              onPressed: enabled ? onUndo : null,
-              child: const Text('Вернуть исходный текст и роли'),
-            ),
+            if (result == null && !busy)
+              TextButton.icon(
+                key: const ValueKey('prepare-roles'),
+                onPressed: enabled && hasText ? onRequest : null,
+                icon: const Icon(Icons.auto_awesome_outlined, size: 16),
+                label: const Text('Определить участников'),
+              ),
           ],
-          if (result != null) ...[
-            const SizedBox(height: 16),
-            Text(
-              'Предположение ИИ · ${result.model}',
-              style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        if (busy) ...[
+          const SizedBox(height: 12),
+          const LinearProgressIndicator(),
+          const SizedBox(height: 10),
+          const Text('Определяем участников…', style: TextStyle(color: muted)),
+        ],
+        if (error != null) ...[
+          const SizedBox(height: 10),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              error!,
+              style: const TextStyle(color: brick, height: 1.5),
             ),
-            const SizedBox(height: 8),
-            if (result.sourceSpeakerCount > 0)
-              Text(
-                'Исходных меток: ${result.sourceSpeakerCount} → '
-                'ИИ предлагает участников: ${result.participants.length}',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            Text(result.notice, style: const TextStyle(height: 1.5)),
-            for (final participant in result.participants.take(6)) ...[
-              const SizedBox(height: 14),
-              _participantCard(participant),
-            ],
-            if (result.participants.length > 6)
-              ExpansionTile(
-                title: Text(
-                  'Остальные участники: ${result.participants.length - 6}',
-                ),
+          ),
+        ],
+        if (result != null) ...[
+          const SizedBox(height: 8),
+          const Text(
+            'Проверьте предложенные роли. Если нужно, выберите другую.',
+            style: TextStyle(color: muted, height: 1.5),
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth > 760
+                  ? 3
+                  : constraints.maxWidth > 460
+                  ? 2
+                  : 1;
+              final width =
+                  (constraints.maxWidth - (columns - 1) * 12) / columns;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
                 children: [
-                  for (final p in result.participants.skip(6))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 10),
-                      child: _participantCard(p),
-                    ),
+                  for (final p in result.participants.take(6))
+                    SizedBox(width: width, child: _person(p)),
                 ],
-              ),
-            const SizedBox(height: 12),
+              );
+            },
+          ),
+          if (result.participants.length > 6)
             ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: const Text('Посмотреть разметку реплик'),
+              title: Text('Ещё участники: ${result.participants.length - 6}'),
               children: [
-                SizedBox(
-                  height: 260,
-                  child: SingleChildScrollView(
-                    child: SelectableText(
-                      result.transcript,
+                for (final p in result.participants.skip(6)) _person(p),
+              ],
+            ),
+          ExpansionTile(
+            key: const ValueKey('role-reasons'),
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'Почему такие роли?',
+              style: TextStyle(fontSize: 13, color: muted),
+            ),
+            children: [
+              if (result.sourceSpeakerCount > 0)
+                Text(
+                  'Исходных меток: ${result.sourceSpeakerCount} → '
+                  'ИИ предлагает участников: ${result.participants.length}',
+                ),
+              Text(
+                result.notice,
+                style: const TextStyle(fontSize: 12, color: muted, height: 1.5),
+              ),
+              for (final p in result.participants)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Участник ${p.speaker}: ${p.manuallyEdited ? 'роль изменена вами' : p.reason}'
+                      '${p.sourceSpeakers.length > 1 ? '\nОбъединены метки: ${p.sourceSpeakers.join(', ')}' : ''}',
                       style: const TextStyle(fontSize: 13, height: 1.5),
                     ),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton(
-                  key: const ValueKey('apply-role-preparation'),
-                  onPressed: enabled ? onApply : null,
-                  child: const Text('Подтвердить участников'),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 220,
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    result.transcript,
+                    style: const TextStyle(fontSize: 13, height: 1.5),
+                  ),
                 ),
-                TextButton(
-                  onPressed: enabled ? onDismiss : null,
-                  child: const Text('Оставить исходный текст'),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              FilledButton(
+                key: const ValueKey('apply-role-preparation'),
+                onPressed: enabled ? onApply : null,
+                child: const Text('Подтвердить участников'),
+              ),
+              TextButton(
+                onPressed: enabled ? onDismiss : null,
+                child: const Text('Оставить мой текст'),
+              ),
+            ],
+          ),
+        ] else if (!busy)
+          const Text(
+            'Выберите роли или определите их автоматически.',
+            style: TextStyle(color: muted, fontSize: 13),
+          ),
+        if (canUndo)
+          TextButton(
+            key: const ValueKey('undo-role-preparation'),
+            onPressed: enabled ? onUndo : null,
+            child: const Text('Отменить разметку'),
+          ),
+      ],
     );
   }
 
-  Widget _participantCard(SpeakerSuggestion participant) => Container(
+  Widget _person(SpeakerSuggestion person) => Container(
     width: double.infinity,
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12),
+      color: const Color(0xFFF7F5F2),
+      borderRadius: BorderRadius.circular(14),
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Участник ${participant.speaker} — ${participant.role.label}',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        DropdownButtonFormField<ParticipantRole>(
+          key: ValueKey('suggested-role-${person.speaker}-${person.role.name}'),
+          initialValue: person.role,
+          isExpanded: true,
+          decoration: InputDecoration(labelText: 'Участник ${person.speaker}'),
+          items: ParticipantRole.values
+              .map(
+                (r) => DropdownMenuItem(
+                  value: r,
+                  child: Text(
+                    r.label,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: enabled
+              ? (role) {
+                  if (role != null) onRoleChanged(person.speaker, role);
+                }
+              : null,
         ),
-        if (participant.sourceSpeakers.length > 1)
-          Text(
-            'Объединены метки: ${participant.sourceSpeakers.take(8).join(', ')}'
-            '${participant.sourceSpeakers.length > 8 ? ' и ещё ${participant.sourceSpeakers.length - 8}' : ''}',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF746F69)),
-          ),
+        const SizedBox(height: 10),
         Text(
-          'Уверенность модели: ${participant.confidence.label}',
-          style: const TextStyle(fontSize: 12, color: Color(0xFF746F69)),
-        ),
-        const SizedBox(height: 4),
-        Text(participant.reason, style: const TextStyle(height: 1.5)),
-        Text(
-          '«${participant.evidence}»',
-          style: const TextStyle(height: 1.5, fontStyle: FontStyle.italic),
+          '«${person.evidence}»',
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 12, color: muted, height: 1.5),
         ),
       ],
     ),

@@ -62,7 +62,7 @@ class AuditService:
     async def _generate(self, payload, instructions, output_type, convert):
         if self.client is None:
             raise AnalysisError(503, "api_not_configured",
-                                "API-ключ на сервере не настроен. Демо остаётся доступным.")
+                                "API-ключ на сервере не настроен. Обратитесь к администратору.")
         try:
             await asyncio.wait_for(self._gate.acquire(), timeout=0.05)
         except TimeoutError:

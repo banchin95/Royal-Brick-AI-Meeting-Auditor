@@ -18,11 +18,21 @@ class RoyalBrickApp extends StatelessWidget {
       scaffoldBackgroundColor: const Color(0xFFF7F5F2),
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFE0DBD4)),
+        ),
         contentPadding: const EdgeInsets.all(16),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+          side: const BorderSide(color: Color(0xFFD9D1C8)),
         ),
       ),
     ),

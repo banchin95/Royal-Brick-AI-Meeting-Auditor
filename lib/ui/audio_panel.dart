@@ -7,6 +7,7 @@ import '../domain/audio.dart';
 import '../services/audio_recorder.dart';
 import '../services/audit_api.dart';
 import 'audio_preview.dart';
+import 'workspace_widgets.dart';
 
 class AudioPanel extends StatefulWidget {
   const AudioPanel({
@@ -15,16 +16,14 @@ class AudioPanel extends StatefulWidget {
     required this.enabled,
     required this.onBusy,
     required this.onResult,
-    required this.aiMode,
-    required this.onEnableAi,
+    required this.onUseText,
     this.autoPrepareRoles = false,
   });
   final AuditApi api;
   final bool enabled;
   final ValueChanged<bool> onBusy;
   final ValueChanged<TranscriptionResult> onResult;
-  final bool aiMode;
-  final VoidCallback onEnableAi;
+  final VoidCallback onUseText;
   final bool autoPrepareRoles;
   @override
   State<AudioPanel> createState() => _AudioPanelState();
@@ -37,10 +36,7 @@ class _AudioPanelState extends State<AudioPanel> {
   int _seconds = 0;
   DateTime? _recordingStartedAt;
   int _generation = 0;
-  bool _recording = false,
-      _working = false,
-      _recognizing = false,
-      _diarize = false;
+  bool _recording = false, _working = false, _recognizing = false;
   String? _jobId, _error;
   String _status = '';
 
@@ -186,16 +182,16 @@ class _AudioPanelState extends State<AudioPanel> {
 
   Future<void> _recognize() async {
     final audio = _audio;
-    if (_locked || audio == null || !widget.aiMode) return;
+    if (_locked || audio == null) return;
     final generation = ++_generation;
     setState(() {
       _recognizing = true;
       _error = null;
-      _status = 'Передаю аудио на локальный backend…';
+      _status = 'Загружаем аудио…';
     });
     widget.onBusy(true);
     try {
-      var job = await widget.api.startTranscription(audio, _diarize);
+      var job = await widget.api.startTranscription(audio, false);
       if (!mounted || generation != _generation) {
         await widget.api.cancelTranscription(job['id'] as String);
         return;
@@ -227,7 +223,7 @@ class _AudioPanelState extends State<AudioPanel> {
         }
         setState(
           () => _status =
-              '${status == 'preparing' ? 'Подготавливаю аудио' : 'Распознаю речь в OpenAI'}'
+              '${status == 'preparing' ? 'Подготавливаем аудио' : 'Распознаём речь'}'
               '${(job['total_parts'] as num? ?? 0) > 1 ? ' · готово частей ${job['completed_parts']} из ${job['total_parts']}' : ''} · '
               '${audioTime((job['elapsed_seconds'] as num).toInt())}',
         );
@@ -297,33 +293,21 @@ class _AudioPanelState extends State<AudioPanel> {
   }
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: const Color(0xFFE6E0D9)),
-    ),
+  Widget build(BuildContext context) => SectionCard(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Аудиозапись',
-          style: TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
+        const SectionHeading(
+          number: 1,
+          title: 'Добавьте разговор',
+          subtitle: 'Загрузите аудио или запишите встречу с микрофона.',
         ),
-        const SizedBox(height: 10),
-        const Text(
-          'Загрузите разговор или запишите его с микрофона. После распознавания '
-          'проверьте реплики и назначьте роли участников.',
-          style: TextStyle(height: 1.6),
-        ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 24),
         Wrap(
           spacing: 12,
           runSpacing: 12,
           children: [
-            OutlinedButton.icon(
+            FilledButton.icon(
               onPressed: _locked ? null : _pick,
               icon: const Icon(Icons.upload_file_outlined),
               label: const Text('Загрузить аудио'),
@@ -345,6 +329,10 @@ class _AudioPanelState extends State<AudioPanel> {
                     : 'Записать разговор',
               ),
             ),
+            TextButton(
+              onPressed: _locked ? null : widget.onUseText,
+              child: const Text('У меня есть текст'),
+            ),
           ],
         ),
         if (_recording) ...[
@@ -362,26 +350,12 @@ class _AudioPanelState extends State<AudioPanel> {
           ),
           const SizedBox(height: 10),
           AudioPreview(audio: _audio!),
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            title: const Text(
-              'Разделить по участникам',
-              style: TextStyle(fontSize: 14),
-            ),
-            subtitle: const Text(
-              'Экспериментальный режим: может работать дольше. '
-              'Один человек может получить несколько меток в разных частях записи.',
-            ),
-            value: _diarize,
-            onChanged: _locked
-                ? null
-                : (value) => setState(() => _diarize = value),
-          ),
+          const SizedBox(height: 12),
           Text(
-            'При распознавании аудио передаётся в OpenAI. Исходный файл не изменяется. '
-            'Текст ниже обновится после успешного распознавания. '
-            '${widget.autoPrepareRoles ? 'Затем ИИ автоматически предложит участников и роли по тексту.' : 'Роли можно предложить по тексту или назначить вручную.'}',
-            style: const TextStyle(fontSize: 12, height: 1.6),
+            widget.autoPrepareRoles
+                ? 'Получим текст и автоматически определим участников.'
+                : 'Получим текст разговора для проверки.',
+            style: const TextStyle(fontSize: 13, color: muted, height: 1.5),
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -389,15 +363,9 @@ class _AudioPanelState extends State<AudioPanel> {
             runSpacing: 12,
             children: [
               FilledButton.icon(
-                onPressed: _locked
-                    ? null
-                    : widget.aiMode
-                    ? _recognize
-                    : widget.onEnableAi,
+                onPressed: _locked ? null : _recognize,
                 icon: const Icon(Icons.graphic_eq),
-                label: Text(
-                  widget.aiMode ? 'Распознать аудио' : 'Включить режим ИИ',
-                ),
+                label: const Text('Распознать аудио'),
               ),
               if (_recognizing && _jobId != null)
                 TextButton(
@@ -427,9 +395,8 @@ class _AudioPanelState extends State<AudioPanel> {
         ],
         const SizedBox(height: 12),
         const Text(
-          'M4A, MP3, WAV, WebM, OGG, FLAC, AAC, MP4 · До 100 МБ и 60 минут. '
-          'Запись и выбранный файл хранятся в памяти вкладки до её закрытия.',
-          style: TextStyle(fontSize: 12, color: Color(0xFF746F69), height: 1.6),
+          'MP3, M4A, WAV и другие форматы · до 100 МБ · до 60 минут',
+          style: TextStyle(fontSize: 12, color: muted, height: 1.5),
         ),
       ],
     ),

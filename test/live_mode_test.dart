@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:royal_brick_meeting_auditor/services/audit_api.dart';
 import 'package:royal_brick_meeting_auditor/ui/audit_page.dart';
+import 'package:royal_brick_meeting_auditor/ui/audio_panel.dart';
+import 'package:royal_brick_meeting_auditor/domain/audio.dart';
 
 import 'support/api_fixture.dart';
 
@@ -20,14 +22,35 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final pending = Completer<http.Response>();
     final api = AuditApi(client: MockClient((request) => pending.future));
-    await tester.pumpWidget(MaterialApp(home: AuditPage(api: api)));
-    await tester.tap(find.text('ИИ-анализ'));
+    await tester.pumpWidget(
+      MaterialApp(home: AuditPage(api: api, autoPrepareAudio: false)),
+    );
+    tester
+        .widget<AudioPanel>(find.byType(AudioPanel))
+        .onResult(
+          const TranscriptionResult(
+            text:
+                'Участник 1: Здравствуйте! Чем могу помочь?\nУчастник 2: Нужна облицовка.',
+            speakers: [1, 2],
+            duration: 10,
+            notice: 'Проверьте текст.',
+            hasSpeakers: true,
+          ),
+        );
     await tester.pumpAndSettle();
-    final button = find.byKey(const ValueKey('show-demo-report'));
+    for (final entry in {1: 'Менеджер', 2: 'Клиент'}.entries) {
+      final field = find.byKey(ValueKey('role-${entry.key}-unknown'));
+      await tester.ensureVisible(field);
+      await tester.tap(field);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(entry.value).last);
+      await tester.pumpAndSettle();
+    }
+    final button = find.byKey(const ValueKey('analyze-meeting'));
     await tester.ensureVisible(button);
     await tester.tap(button);
     await tester.pump();
-    expect(find.text('Анализирую…'), findsOneWidget);
+    expect(find.text('Создаём отчёт…'), findsOneWidget);
     expect(tester.widget<FilledButton>(button).onPressed, isNull);
 
     pending.complete(
@@ -40,7 +63,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('50 / 100'), findsOneWidget);
     expect(find.text('66 / 100'), findsNothing);
-    expect(find.textContaining('ИИ-анализ · 13 разделов'), findsOneWidget);
+    expect(
+      find.text('13 разделов с оценкой, выводами и следующим шагом.'),
+      findsOneWidget,
+    );
 
     final text = find.byKey(const ValueKey('transcript'));
     await tester.ensureVisible(text);

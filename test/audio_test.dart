@@ -82,9 +82,12 @@ void main() {
             ),
           );
       await tester.pumpAndSettle();
-      final button = find.byKey(const ValueKey('show-demo-report'));
+      final button = find.byKey(const ValueKey('analyze-meeting'));
       expect(tester.widget<FilledButton>(button).onPressed, isNull);
       expect(find.byKey(const ValueKey('role-3-unknown')), findsOneWidget);
+      await tester.ensureVisible(find.text('Дополнительно'));
+      await tester.tap(find.text('Дополнительно'));
+      await tester.pumpAndSettle();
       final context = tester.widget<TextField>(
         find.byKey(const ValueKey('analysis-context')),
       );
@@ -131,6 +134,12 @@ void main() {
             hasSpeakers: true,
           ),
         );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Дополнительно'));
+    await tester.tap(find.text('Дополнительно'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Исправить метки вручную'));
+    await tester.tap(find.text('Исправить метки вручную'));
     await tester.pumpAndSettle();
     final merge = find.byKey(const ValueKey('merge-3-1-2-3'));
     await tester.ensureVisible(merge);
